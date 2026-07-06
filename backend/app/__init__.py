@@ -1,5 +1,6 @@
 from flask import Flask
 from flask_cors import CORS
+
 from app.config import get_config
 from app.routes.health import health_bp
 from app.routes.quiz import quiz_bp

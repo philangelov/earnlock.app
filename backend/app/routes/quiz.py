@@ -1,4 +1,5 @@
-from flask import Blueprint, jsonify, g
+from flask import Blueprint, g, jsonify
+
 from app.middleware.auth import require_auth
 
 quiz_bp = Blueprint("quiz", __name__, url_prefix="/quiz")
