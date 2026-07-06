@@ -1,98 +1,101 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import type { ReactNode } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Icon, type IconName } from '@/components/Icon';
+import { PrimaryButton } from '@/components/PrimaryButton';
+import { Screen } from '@/components/Screen';
+import { Font } from '@/theme/tokens';
+import { useTokens } from '@/theme/theme';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
+function Benefit({
+  icon,
+  iconColor,
+  iconBg,
+  title,
+  desc,
+}: {
+  icon: IconName;
+  iconColor: string;
+  iconBg: string;
+  title: string;
+  desc: string;
+}) {
+  const t = useTokens();
   return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
+    <View style={styles.benefitRow}>
+      <View style={[styles.benefitIcon, { backgroundColor: iconBg }]}>
+        <Icon name={icon} size={23} color={iconColor} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.benefitTitle, { color: t.text }]}>{title}</Text>
+        <Text style={[styles.benefitDesc, { color: t.text2 }]}>{desc}</Text>
+      </View>
+    </View>
   );
 }
 
-export default function HomeScreen() {
+export default function WelcomeScreen() {
+  const t = useTokens();
+  const router = useRouter();
+
   return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
+    <Screen scroll contentStyle={styles.content}>
+      <Text style={[styles.title, { color: t.text }]}>Welcome to{'\n'}EarnLock</Text>
+      <Text style={[styles.subtitle, { color: t.text2 }]}>
+        Turn screen time into a reward you earn by learning.
+      </Text>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+      <View style={styles.benefits}>
+        <Benefit
+          icon="lockRound"
+          iconColor={t.primary}
+          iconBg={t.primarySoft}
+          title="Lock the distractions"
+          desc="Pick the apps that eat your time. They stay locked until you learn."
+        />
+        <Benefit
+          icon="star"
+          iconColor={t.success}
+          iconBg={t.successSoft}
+          title="Earn time by learning"
+          desc="Answer quick AI questions from your own notes to unlock minutes."
+        />
+        <Benefit
+          icon="flame"
+          iconColor={t.fire}
+          iconBg="rgba(255,106,69,0.14)"
+          title="Keep your streak alive"
+          desc="Climb your knowledge map and build a daily learning streak."
+        />
+      </View>
 
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+      <View style={styles.spacer} />
+      <PrimaryButton label="Get started" onPress={() => router.push('/grade')} />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
-  },
+  content: { paddingTop: 6, paddingHorizontal: 26, paddingBottom: 24 },
   title: {
-    textAlign: 'center',
+    fontFamily: Font.baloo800,
+    fontSize: 31,
+    lineHeight: 34,
+    letterSpacing: -0.4,
+    marginTop: 14,
   },
-  code: {
-    textTransform: 'uppercase',
+  subtitle: { fontFamily: Font.nunito600, fontSize: 15.5, marginTop: 10, lineHeight: 22 },
+  benefits: { gap: 24, marginTop: 38 },
+  benefitRow: { flexDirection: 'row', gap: 15, alignItems: 'flex-start' },
+  benefitIcon: {
+    width: 47,
+    height: 47,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
-  },
+  benefitTitle: { fontFamily: Font.baloo700, fontSize: 18 },
+  benefitDesc: { fontFamily: Font.nunito600, fontSize: 14.5, lineHeight: 20.6, marginTop: 2 },
+  spacer: { flex: 1, minHeight: 20 },
 });
