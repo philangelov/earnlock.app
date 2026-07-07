@@ -6,7 +6,8 @@ load_dotenv()
 
 
 class Config:
-    SUPABASE_JWT_SECRET = os.environ["SUPABASE_JWT_SECRET"]
+    SUPABASE_URL = os.environ["SUPABASE_URL"]
+    SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081").split(",")
 
 

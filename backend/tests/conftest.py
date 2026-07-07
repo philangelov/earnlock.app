@@ -2,7 +2,8 @@ import os
 
 import pytest
 
-os.environ.setdefault("SUPABASE_JWT_SECRET", "test-secret-for-ci")
+os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
+os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key-for-ci")
 
 from app import create_app
 

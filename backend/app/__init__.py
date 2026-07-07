@@ -1,7 +1,9 @@
 from flask import Flask
 from flask_cors import CORS
+from jwt import PyJWKClient
 
 from app.config import get_config
+from app.routes.auth import auth_bp
 from app.routes.health import health_bp
 from app.routes.quiz import quiz_bp
 
@@ -13,6 +15,10 @@ def create_app():
 
     CORS(app, origins=config.ALLOWED_ORIGINS)
 
+    jwks_url = f"{config.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+    app.jwks_client = PyJWKClient(jwks_url)
+
+    app.register_blueprint(auth_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(quiz_bp)
 

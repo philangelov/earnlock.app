@@ -161,7 +161,7 @@ storage. Recommended additions:
 | Concern | Choice | Notes |
 |---|---|---|
 | Framework | **Flask** | app factory + blueprints per domain |
-| Auth | Supabase JWT validation | verify signature against Supabase JWKS; no session state |
+| Auth | Supabase JWT validation | verify signature against Supabase's JWKS endpoint (ES256); no session state |
 | CORS | flask-cors | allow the Expo dev origins + production scheme |
 | DB access | Supabase Python client or `psycopg` | reads/writes with the service role, RLS enforced for user-scoped queries |
 | Config | env vars | `dev`/`prod` split, secrets never committed |
@@ -221,8 +221,9 @@ invalid output: retry once, then fall back to a dummy question. `explanation` is
 1. Mobile calls Supabase Auth (`register`/`login`) → receives a **JWT**.
 2. JWT is stored in `expo-secure-store`.
 3. Every backend request sends `Authorization: Bearer <jwt>`.
-4. Backend middleware verifies the signature/expiry against Supabase JWKS and extracts the
-   `user_id` (the `sub` claim). No server-side sessions.
+4. Backend middleware verifies the signature/expiry against Supabase's JWKS endpoint
+   (ES256) and extracts the `user_id` (the `sub` claim). No server-side sessions. Full
+   claim anatomy: [`docs/auth.md`](./auth.md).
 
 ### 7.2 Earn screen time (the main loop)
 ```
@@ -301,10 +302,9 @@ Full column types, constraints, and the migration approach are in
 
 | Variable | Where | Purpose |
 |---|---|---|
-| `SUPABASE_URL` | mobile + backend | project URL |
-| `SUPABASE_ANON_KEY` | mobile | Auth (login/register) |
+| `SUPABASE_URL` | mobile + backend | project URL; backend also derives its JWKS endpoint from this (`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`) |
+| `SUPABASE_ANON_KEY` | mobile + backend | mobile: direct Auth calls if ever needed; backend: `/auth/register` and `/auth/login` passthrough to Supabase Auth |
 | `SUPABASE_SERVICE_ROLE_KEY` | backend only (secret) | privileged DB access |
-| `SUPABASE_JWKS_URL` / `SUPABASE_JWT_SECRET` | backend | JWT verification |
 | `EARNLOCK_API_URL` | mobile | backend base URL |
 | Rule constants (§8) | backend | tunable business rules |
 
@@ -315,7 +315,8 @@ holds public keys (anon key); the service role key stays server-side.
 
 - **Server-authoritative currency** — clients cannot mint seconds; all math is server-side.
 - **RLS everywhere** — even if the backend has a bug, Postgres refuses cross-user reads.
-- **JWT verified per request** — stateless, signature-checked against Supabase JWKS.
+- **JWT verified per request** — stateless, signature-checked against Supabase's JWKS
+  endpoint (ES256).
 - **Screen Time authorization is local** — the native module never sends the app list off
   device beyond what the user chooses to lock.
 

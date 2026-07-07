@@ -15,8 +15,10 @@
   ```
   Authorization: Bearer <supabase_jwt>
   ```
-  The backend verifies the JWT against Supabase JWKS and derives `user_id` from the `sub`
-  claim. Clients never send `user_id` in the body — the token is the identity.
+  The backend verifies the JWT's ES256 signature against Supabase's JWKS endpoint
+  (`${SUPABASE_URL}/auth/v1/.well-known/jwks.json`) and derives `user_id` from the `sub`
+  claim. Clients never send `user_id` in the body — the token is the identity. Full claim
+  schema: [`docs/auth.md`](./auth.md).
 - **Times:** all durations are **seconds** (integers). Timestamps are ISO-8601 UTC.
 - **IDs:** UUID v4 strings.
 
@@ -69,8 +71,11 @@ Every non-2xx response uses this body:
 
 ## 2. Auth
 
-Auth is backed by Supabase Auth. These endpoints may be thin passthroughs, but the contract
-is fixed so the client depends only on EarnLock.
+Auth is backed by Supabase Auth. These endpoints are thin passthroughs to Supabase's
+`/auth/v1/signup` and `/auth/v1/token?grant_type=password`, but the contract is fixed so
+the client depends only on EarnLock. Email confirmation is **disabled** on the Supabase
+project, so both endpoints return a usable token immediately — no "check your email" step.
+Full JWT claim schema and rationale: [`docs/auth.md`](./auth.md).
 
 ### `POST /auth/register`
 **Request**

@@ -13,16 +13,17 @@ def require_auth(f):
 
         token = auth_header.split(" ", 1)[1]
         try:
+            signing_key = current_app.jwks_client.get_signing_key_from_jwt(token)
             payload = jwt.decode(
                 token,
-                current_app.config["SUPABASE_JWT_SECRET"],
-                algorithms=["HS256"],
+                signing_key.key,
+                algorithms=["ES256"],
                 audience="authenticated",
             )
             g.user_id = payload["sub"]
         except jwt.ExpiredSignatureError:
             return jsonify({"error": "Token expired"}), 401
-        except jwt.InvalidTokenError:
+        except (jwt.InvalidTokenError, jwt.PyJWKClientError):
             return jsonify({"error": "Invalid token"}), 401
 
         return f(*args, **kwargs)
