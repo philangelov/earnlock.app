@@ -1,37 +1,150 @@
-from flask import Blueprint, g, jsonify
+"""Quiz engine — generate a quiz and score a submission (docs/api-contract.md §5).
 
+/submit is the heart of the currency: it grades answers server-side against the stored
+key, computes earned screen-time (config-driven, capped), persists it atomically to the
+hybrid ledger (balance + quiz_history) with an idempotency guard, clears SOS debt, and
+returns per-question remediation for wrong answers (used by Learning Mode).
+"""
+
+from datetime import UTC, datetime
+
+from flask import Blueprint, current_app, g, jsonify, request
+
+from app.ai import get_explainer
 from app.middleware.auth import require_auth
+from app.quiz_content import build_questions, public_view
+from app.repos import quiz_repo
+from app.repos.quiz_repo import QuizAlreadySubmitted
 
 quiz_bp = Blueprint("quiz", __name__, url_prefix="/quiz")
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _error(code: str, message: str, status: int):
+    return jsonify({"error": {"code": code, "message": message}}), status
+
+
+def _reward_seconds(correct_count: int) -> int:
+    """Linear per correct answer, capped at the full reward (architecture.md §8)."""
+    target = current_app.config["QUIZ_CORRECT_TARGET"]
+    reward = current_app.config["REWARD_SECONDS"]
+    seconds_per_correct = reward // target
+    return min(correct_count, target) * seconds_per_correct
 
 
 @quiz_bp.post("/generate")
 @require_auth
 def generate_quiz():
-    return jsonify({
-        "quiz_id": "mock-quiz-001",
-        "user_id": g.user_id,
-        "questions": [
-            {
-                "id": "q1",
-                "text": "What is the time complexity of binary search?",
-                "options": ["O(n)", "O(log n)", "O(n²)", "O(1)"],
-                "correct_index": 1,
-            }
-        ],
-        "generated_at": "2026-07-06T00:00:00Z",
-    })
+    has_debt = quiz_repo.get_debt_flag(g.user_id)
+    question_count = (
+        current_app.config["QUIZ_LEN_DEBT"]
+        if has_debt
+        else current_app.config["QUIZ_LEN_NORMAL"]
+    )
+    questions = build_questions(question_count)
+    quiz_id = quiz_repo.create_quiz(g.user_id, questions)
+    return jsonify(
+        {
+            "quiz_id": quiz_id,
+            "user_id": g.user_id,
+            "question_count": len(questions),
+            "questions": public_view(questions),  # answers omitted (security)
+            "generated_at": _now_iso(),
+        }
+    )
 
 
 @quiz_bp.post("/submit")
 @require_auth
 def submit_quiz():
-    return jsonify({
-        "quiz_id": "mock-quiz-001",
-        "user_id": g.user_id,
-        "score": 1,
-        "total": 1,
-        "passed": True,
-        "unlock_granted": True,
-        "submitted_at": "2026-07-06T00:00:00Z",
-    })
+    payload = request.get_json(silent=True) or {}
+    quiz_id = payload.get("quiz_id")
+    answers = payload.get("answers")
+    if not isinstance(quiz_id, str) or not isinstance(answers, list):
+        return _error("validation_error", "quiz_id and answers[] are required", 400)
+
+    # Normalize answers to {question_id: selected_index|None}.
+    answer_map: dict[str, int | None] = {}
+    for answer in answers:
+        if not isinstance(answer, dict):
+            return _error("validation_error", "each answer must be an object", 400)
+        answer_id = answer.get("id")
+        selected_index = answer.get("selected_index")
+        if not isinstance(answer_id, str):
+            return _error("validation_error", "answer.id must be a string", 400)
+        if selected_index is not None and not isinstance(selected_index, int):
+            return _error(
+                "validation_error", "selected_index must be an integer or null", 400
+            )
+        answer_map[answer_id] = selected_index
+
+    quiz = quiz_repo.get_quiz(quiz_id, g.user_id)
+    if quiz is None:
+        return _error("not_found", "quiz not found", 404)
+    if quiz.get("submitted_at") is not None:
+        return _error("conflict", "quiz already submitted", 409)
+
+    questions = quiz["questions"]
+    explainer = get_explainer()
+    locale = request.headers.get("Accept-Language", "en").split(",")[0] or "en"
+
+    correct_count = 0
+    results = []
+    for question in questions:
+        selected_index = answer_map.get(question["id"])
+        is_correct = selected_index == question["correct_index"]
+        explanation = None
+        if is_correct:
+            correct_count += 1
+        else:
+            explanation = explainer.explain(
+                prompt=question["prompt"],
+                options=question["options"],
+                correct_index=question["correct_index"],
+                selected_index=selected_index,
+                concept=question.get("concept"),
+                locale=locale,
+            )
+        results.append(
+            {
+                "id": question["id"],
+                "correct": is_correct,
+                "selected_index": selected_index,
+                "correct_index": question["correct_index"],
+                "explanation": explanation,
+            }
+        )
+
+    earned_seconds = _reward_seconds(correct_count)
+    target = current_app.config["QUIZ_CORRECT_TARGET"]
+    had_debt = quiz_repo.get_debt_flag(g.user_id)
+    sos_debt_cleared = had_debt and correct_count >= target
+
+    # Atomic: idempotent submit + balance credit + history + debt clear.
+    try:
+        new_balance = quiz_repo.submit_reward(
+            user_id=g.user_id,
+            quiz_id=quiz_id,
+            correct_count=correct_count,
+            earned_seconds=earned_seconds,
+            clear_debt=sos_debt_cleared,
+        )
+    except QuizAlreadySubmitted:
+        return _error("conflict", "quiz already submitted", 409)
+
+    return jsonify(
+        {
+            "quiz_id": quiz_id,
+            "user_id": g.user_id,
+            "correct_count": correct_count,
+            "total": len(results),
+            "earned_seconds": earned_seconds,
+            "new_balance_seconds": new_balance,
+            "sos_debt_cleared": sos_debt_cleared,
+            "results": results,
+            "submitted_at": _now_iso(),
+        }
+    )

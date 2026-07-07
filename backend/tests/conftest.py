@@ -7,6 +7,8 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key-for-ci")
 
 from app import create_app
 
+TEST_USER_ID = "user-123"
+
 
 @pytest.fixture
 def client():
@@ -14,3 +16,24 @@ def client():
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
+
+
+@pytest.fixture
+def auth_headers(monkeypatch):
+    """Bypass JWKS/ES256 verification: any bearer token authenticates as TEST_USER_ID.
+
+    Matches the production auth path (middleware calls get_signing_key_from_jwt then
+    jwt.decode) without needing a live Supabase project or real keypair.
+    """
+    from jwt import PyJWKClient
+
+    class _SigningKey:
+        key = "test-key"
+
+    monkeypatch.setattr(
+        PyJWKClient, "get_signing_key_from_jwt", lambda self, token: _SigningKey()
+    )
+    monkeypatch.setattr(
+        "app.middleware.auth.jwt.decode", lambda *args, **kwargs: {"sub": TEST_USER_ID}
+    )
+    return {"Authorization": "Bearer test-token"}
