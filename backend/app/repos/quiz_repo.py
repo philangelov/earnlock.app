@@ -1,13 +1,13 @@
-"""Data access for the quiz engine (Supabase / Postgres, service-role).
+"""Data access for the quiz engine, on the backend's PostgREST service-role client.
 
-Keeps all persistence in one place so the routes stay thin and the layer is trivially
-mockable in tests. The reward credit is applied through a single Postgres function
-(`submit_quiz_reward`, migration 0010) so balance update + history insert + debt clear +
-the "already submitted" guard all happen in one atomic transaction — no double
-rewards from rapid-fire submits, even across workers/restarts.
+Reuses app/services/supabase.py (the urllib/service_role layer used for profiles) so
+there is one Supabase access path and no extra HTTP dependency. The reward credit runs
+through the submit_quiz_reward Postgres function (migration 0010) so balance update +
+history insert + debt clear + the "already submitted" guard are one atomic transaction —
+no double rewards from rapid-fire submits, even across workers/restarts.
 """
 
-from app.db import get_supabase
+from app.services.supabase import SupabaseError, _rest_request, get_profile_row
 
 
 class QuizAlreadySubmitted(Exception):
@@ -20,42 +20,34 @@ _ALREADY_SUBMITTED_MARKER = "quiz_already_submitted"
 
 def create_quiz(user_id: str, questions: list[dict]) -> str:
     """Persist a generated quiz (questions incl. answer keys) and return its id."""
-    resp = (
-        get_supabase()
-        .table("quizzes")
-        .insert({"user_id": user_id, "questions": questions})
-        .execute()
+    rows, _ = _rest_request(
+        "POST",
+        "quizzes",
+        body={"user_id": user_id, "questions": questions},
+        prefer="return=representation",
     )
-    return resp.data[0]["id"]
+    return rows[0]["id"]
 
 
 def get_quiz(quiz_id: str, user_id: str) -> dict | None:
     """Load a quiz owned by the user, or None if it does not exist / isn't theirs."""
-    resp = (
-        get_supabase()
-        .table("quizzes")
-        .select("id, user_id, questions, submitted_at")
-        .eq("id", quiz_id)
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
+    rows, _ = _rest_request(
+        "GET",
+        "quizzes",
+        params={
+            "id": f"eq.{quiz_id}",
+            "user_id": f"eq.{user_id}",
+            "select": "id,user_id,questions,submitted_at",
+            "limit": "1",
+        },
     )
-    rows = resp.data or []
     return rows[0] if rows else None
 
 
 def get_debt_flag(user_id: str) -> bool:
     """Read profiles.sos_debt_flag; False if the profile row is absent."""
-    resp = (
-        get_supabase()
-        .table("profiles")
-        .select("sos_debt_flag")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    rows = resp.data or []
-    return bool(rows[0]["sos_debt_flag"]) if rows else False
+    profile = get_profile_row(user_id)
+    return bool(profile["sos_debt_flag"]) if profile else False
 
 
 def submit_reward(
@@ -71,22 +63,19 @@ def submit_reward(
     Raises QuizAlreadySubmitted if the quiz was already scored.
     """
     try:
-        resp = (
-            get_supabase()
-            .rpc(
-                "submit_quiz_reward",
-                {
-                    "p_user_id": user_id,
-                    "p_quiz_id": quiz_id,
-                    "p_correct_count": correct_count,
-                    "p_earned_seconds": earned_seconds,
-                    "p_clear_debt": clear_debt,
-                },
-            )
-            .execute()
+        result, _ = _rest_request(
+            "POST",
+            "rpc/submit_quiz_reward",
+            body={
+                "p_user_id": user_id,
+                "p_quiz_id": quiz_id,
+                "p_correct_count": correct_count,
+                "p_earned_seconds": earned_seconds,
+                "p_clear_debt": clear_debt,
+            },
         )
-    except Exception as exc:  # noqa: BLE001 — normalize the driver's error
+    except SupabaseError as exc:
         if _ALREADY_SUBMITTED_MARKER in str(exc):
             raise QuizAlreadySubmitted(quiz_id) from exc
         raise
-    return int(resp.data)
+    return int(result)

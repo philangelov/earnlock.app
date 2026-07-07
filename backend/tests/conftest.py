@@ -4,7 +4,7 @@ import pytest
 
 os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key-for-ci")
-
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key-for-ci")
 from app import create_app
 
 TEST_USER_ID = "user-123"
