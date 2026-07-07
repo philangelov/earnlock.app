@@ -8,7 +8,7 @@ load_dotenv()
 class Config:
     SUPABASE_URL = os.environ["SUPABASE_URL"]
     SUPABASE_ANON_KEY = os.environ["SUPABASE_ANON_KEY"]
-    SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"] 
+    SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
     ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8081").split(",")
 
 
