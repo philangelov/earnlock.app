@@ -7,6 +7,7 @@ from app.routes.auth import auth_bp
 from app.routes.health import health_bp
 from app.routes.profile import profile_bp
 from app.routes.quiz import quiz_bp
+from app.routes.screentime import screentime_bp
 
 
 def create_app():
@@ -23,5 +24,6 @@ def create_app():
     app.register_blueprint(health_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(quiz_bp)
+    app.register_blueprint(screentime_bp)
 
     return app

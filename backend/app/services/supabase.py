@@ -90,3 +90,13 @@ def update_profile_subjects(user_id, focus_subjects):
         body={"focus_subjects": focus_subjects},
         prefer="return=minimal",
     )
+
+
+def get_screentime_balance(user_id):
+    """Return {remaining_seconds, updated_at}, or None if no wallet row exists yet."""
+    rows, _ = _rest_request(
+        "GET",
+        "screentime_balance",
+        params={"user_id": f"eq.{user_id}", "select": "remaining_seconds,updated_at"},
+    )
+    return rows[0] if rows else None
