@@ -27,6 +27,15 @@ class Config:
     QUIZ_GEN_RETRIES = int(os.getenv("QUIZ_GEN_RETRIES", "1"))
     # Cap on stored study text per imported material (POST /knowledge/import).
     KNOWLEDGE_MAX_CHARS = int(os.getenv("KNOWLEDGE_MAX_CHARS", "12000"))
+    # Bounds on server-side link fetching (issue #12): a slow/huge page must not hang or
+    # blow up memory on a request thread.
+    KNOWLEDGE_FETCH_TIMEOUT_SECONDS = float(
+        os.getenv("KNOWLEDGE_FETCH_TIMEOUT_SECONDS", "10")
+    )
+    KNOWLEDGE_FETCH_MAX_BYTES = int(os.getenv("KNOWLEDGE_FETCH_MAX_BYTES", "2000000"))
+    # Global request body cap (Flask reads this key name automatically) — protects every
+    # endpoint, not just Knowledge Import, from oversized payloads.
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", "1000000"))
 
 
 class DevelopmentConfig(Config):

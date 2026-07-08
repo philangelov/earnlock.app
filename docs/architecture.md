@@ -268,6 +268,10 @@ These live as **backend config constants** so they can be tuned without a client
 | Wake-Up Lock questions | 3 | `WAKEUP_QUESTIONS` |
 | Wake-Up Lock time | 07:30 local | `WAKEUP_TIME` |
 | Learning Mode forced-read | 10 s locked Continue | `LEARNING_LOCK_SECONDS` (client) |
+| Knowledge Import stored-text cap | 12,000 chars | `KNOWLEDGE_MAX_CHARS` |
+| Knowledge Import link-fetch timeout | 10 s | `KNOWLEDGE_FETCH_TIMEOUT_SECONDS` |
+| Knowledge Import link-fetch size cap | 2,000,000 bytes | `KNOWLEDGE_FETCH_MAX_BYTES` |
+| Global request body cap | 1,000,000 bytes | `MAX_CONTENT_LENGTH` |
 
 ### Earned-seconds formula
 

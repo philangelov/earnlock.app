@@ -11,6 +11,8 @@ simply never forwards them to the DB layer.
 
 import re
 
+from app.text_extraction import is_valid_http_url
+
 # --- Focus subjects -------------------------------------------------------------
 # Canonical set from docs/api-contract.md §3. Stored with this exact casing.
 VALID_SUBJECTS = ("Math", "History", "Biology", "English")
@@ -88,31 +90,34 @@ def validate_grade_or_age(value):
     )
 
 
-def validate_knowledge_import(body, max_chars):
-    """Validate a POST /knowledge/import body.
+def validate_knowledge_import(body):
+    """Validate a POST /knowledge/import body (docs/api-contract.md §4).
 
-    Accepts ``text`` (the study material, required) and an optional ``source_type``
-    ('text' | 'link'; default 'text'). Whitespace is collapsed and the text is capped at
-    ``max_chars`` (per the knowledge_materials contract, migration 0004). Returns
-    ``(raw_text, source_type)`` or raises ValidationError.
+    Exactly one shape depending on ``source_type``:
+      * ``{"source_type": "text", "raw_text": "..."}`` — pasted study material.
+      * ``{"source_type": "link", "url": "..."}`` — a page the server fetches itself.
+
+    Returns ``(source_type, raw_text_or_none, url_or_none)``. Normalization/length-
+    capping happens afterwards in the route, on whichever text is finally in hand (typed
+    directly, or extracted from the fetched page) — this function only checks shape.
     """
     if not isinstance(body, dict):
         raise ValidationError("Request body must be a JSON object.")
 
-    text = body.get("text")
-    if not isinstance(text, str) or not text.strip():
-        raise ValidationError("text must be a non-empty string.")
-
-    source_type = body.get("source_type", "text")
+    source_type = body.get("source_type")
     if source_type not in ("text", "link"):
         raise ValidationError("source_type must be 'text' or 'link'.")
 
-    # Normalize: collapse runs of whitespace, then cap length.
-    normalized = re.sub(r"\s+", " ", text).strip()
-    if len(normalized) > max_chars:
-        normalized = normalized[:max_chars].rstrip()
+    if source_type == "text":
+        raw_text = body.get("raw_text")
+        if not isinstance(raw_text, str) or not raw_text.strip():
+            raise ValidationError("raw_text must be a non-empty string.")
+        return source_type, raw_text, None
 
-    return normalized, source_type
+    url = body.get("url")
+    if not isinstance(url, str) or not is_valid_http_url(url):
+        raise ValidationError("url must be a valid http(s) URL.")
+    return source_type, None, url
 
 
 def validate_profile_update(body):
