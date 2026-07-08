@@ -7,7 +7,7 @@ applied, and the exact policy matrix for every table.
 The schema this describes is the one defined in
 [`docs/api-contract.md`](../../docs/api-contract.md#database-schema) and
 [`docs/architecture.md`](../../docs/architecture.md) — `users`, `profiles`,
-`knowledge_materials`, `screentime_balance`, `quiz_history`.
+`knowledge_materials`, `screentime_balance`, `quiz_history`, `quizzes`.
 
 ---
 
@@ -109,10 +109,15 @@ owner, so a stray owner-role query can't bypass isolation. Both are set on all t
 unaffected.)
 
 ### 3.5 Defense-in-depth: revoke the write grants too
-Supabase grants `authenticated` full CRUD on new public tables by default. Because our
-clients are read-only, we **revoke `INSERT`/`UPDATE`/`DELETE` from `authenticated`** on
-every table. Now a client write is denied by *both* a missing grant and a missing
-policy — a later accidental policy alone can't reopen a hole.
+Supabase grants `authenticated`/`anon` full privileges on new public tables by default.
+Because our clients are read-only, we strip everything except the owner-scoped `SELECT`:
+**`INSERT`/`UPDATE`/`DELETE` are revoked from `authenticated`** (migrations 0002-0009),
+**all `anon` privileges are revoked** (0011), and **`TRUNCATE`/`REFERENCES`/`TRIGGER` are
+revoked from `authenticated`** (0012). `TRUNCATE` matters specifically because it is *not*
+filtered by RLS — even though it isn't reachable through the PostgREST data API, we remove
+the grant so the "clients cannot write" guarantee holds at the privilege layer too. Net
+result: a client write is denied by *both* a missing grant and a missing policy — a later
+accidental policy alone can't reopen a hole.
 
 ### 3.6 `SECURITY DEFINER` functions must be pinned and not publicly callable
 `handle_new_user()` intentionally bypasses RLS to provision new accounts. It:
@@ -121,6 +126,10 @@ policy — a later accidental policy alone can't reopen a hole.
 - has its `EXECUTE` grant **revoked** from `anon`/`authenticated`/`public`
   (migration `0008`) so it can't be invoked directly as a PostgREST RPC — it only runs
   from its trigger.
+
+`submit_quiz_reward()` (migration `0010`) follows the same rules: pinned
+`search_path`, schema-qualified objects, and `EXECUTE` granted **only** to
+`service_role` — clients cannot invoke the reward RPC.
 
 ---
 
@@ -137,6 +146,12 @@ performed by the backend via `service_role`, which bypasses RLS.
 | `knowledge_materials` | own | — (revoked) | Written by `/knowledge/import`. |
 | `screentime_balance` | own | — (revoked) | **Currency** — credited only by the backend. |
 | `quiz_history` | own | — (revoked) | Appended by `/quiz/submit`. |
+| `quizzes` | **— (no policy: deny-all)** | — (revoked) | Holds the **answer keys** — clients get zero access; only the backend (`service_role`) reads/writes it (migration `0009`). |
+
+> The `quizzes` table intentionally has RLS enabled with **no policies** (deny-all for
+> `anon`/`authenticated`). The Supabase security advisor reports this as an INFO-level
+> `rls_enabled_no_policy` lint — that is expected and correct here: exposing any part of
+> a quiz row would leak `questions[].correct_index`.
 
 ---
 
@@ -167,6 +182,10 @@ JWT-claims `sub`) and confirming:
    `sos_debt_flag` / backdating `wakeup_completed_date` were **all** rejected with
    `42501 permission denied`.
 4. **Cascade** — deleting the `auth.users` rows removed every dependent row.
-5. **Advisors** — `get_advisors(security)` returns **no** lints.
+5. **Advisors** — `get_advisors(security)` returns no unexpected lints. Two known
+   items remain by design/configuration: the INFO-level `rls_enabled_no_policy` on
+   `quizzes` (intentional deny-all, see §4) and the WARN that Supabase Auth
+   leaked-password protection is disabled (a dashboard Auth setting worth enabling —
+   Authentication → Providers → Password).
 
 See [`../migrations/README.md`](../migrations/README.md) for the migration list.

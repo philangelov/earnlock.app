@@ -13,6 +13,8 @@ import urllib.request
 
 from flask import current_app
 
+_UPSTREAM_TIMEOUT_SECONDS = 10
+
 
 class SupabaseError(Exception):
     """Raised when a PostgREST call fails for a non-recoverable reason."""
@@ -38,17 +40,17 @@ def _rest_request(method, path, *, params=None, body=None, prefer=None):
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
 
     try:
-        with urllib.request.urlopen(req) as res:
+        with urllib.request.urlopen(req, timeout=_UPSTREAM_TIMEOUT_SECONDS) as res:
             raw = res.read()
             return (json.loads(raw) if raw else None), res.status
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
         raise SupabaseError(f"PostgREST {method} {path} failed ({e.code}): {detail}")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, TimeoutError) as e:
         # Connection-level failure (DNS, refused, timeout). HTTPError is a subclass of
         # URLError, so this branch only handles the transport errors — surfaced as a
         # SupabaseError so callers' `except SupabaseError` handles them uniformly.
-        raise SupabaseError(f"PostgREST {method} {path} connection failed: {e.reason}")
+        raise SupabaseError(f"PostgREST {method} {path} connection failed: {e}")
 
 
 def get_user_grade(user_id):

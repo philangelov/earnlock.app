@@ -1,80 +1,60 @@
-# Earnlock App Monorepo
+# EarnLock
 
-This repository is organized into separate frontend and backend projects.
+EarnLock turns screen time into a reward kids earn by learning: distracting apps stay
+locked until the child answers AI-generated quiz questions built from their own study
+material.
 
 ## Repository layout
 
-- `frontend/` — Expo application code, shared UI, and frontend configuration
-- `backend/` — Flask API server and Python backend dependencies
-- `docs/` — architecture and tech stack documentation
-- `.gitignore` — shared ignore rules for both ecosystems
+- `frontend/` — Expo (SDK 57) mobile app: screens, UI components, theme, and local state
+- `backend/` — Flask API server backed by Supabase (auth, profiles, quiz engine, rewards)
+- `docs/` — architecture, API contract, auth, tech stack, and UI/UX documentation
+- `.github/workflows/ci.yml` — CI: lint, format, and type checks plus backend tests
 
-## Run locally from scratch
-   ```bash
-   bun install
-   ```
+## Run locally
 
-### 1. Frontend setup
+### 1. Frontend (Expo app)
 
 ```bash
 cd frontend
-npm install
-```
-   ```bash
-   bunx expo start
-   ```
-
-Start the frontend development server:
-
-```bash
-npm start
+bun install
+bun start
 ```
 
-The Expo app will launch and provide options for web, Android, and iOS.
+The Expo dev server launches with options for iOS, Android, and web.
 
-### 2. Backend setup
-
-Create and activate a Python virtual environment, then install dependencies:
+### 2. Backend (Flask API)
 
 ```bash
 cd backend
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-bun run reset-project
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env             # fill in your Supabase credentials
+python run.py
 ```
 
-Start the Flask backend:
+The API runs on `http://localhost:5000`. Database migrations live in
+`backend/migrations/` and are applied to Supabase in numeric order (see
+`backend/migrations/README.md`).
 
-```bash
-python app.py
-```
+## Validate code quality
 
-The backend API will run on `http://localhost:5000`.
-
-### 3. Validate code quality
-- To set up ESLint for linting, run `bunx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
-
-Frontend validation:
+Frontend (Prettier, ESLint, TypeScript):
 
 ```bash
 cd frontend
 bun run validate
+bunx tsc --noEmit
 ```
 
-Backend validation:
+Backend (ruff + pytest):
 
 ```bash
 cd backend
 sh validate.sh
+python -m pytest
 ```
-
-## Notes
-
-- The frontend expects API calls to be made to the local backend during development.
-- Local runtime files are ignored in `.gitignore` for both `frontend` and `backend`.
 
 ## Branching policy
 

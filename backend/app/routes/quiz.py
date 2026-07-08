@@ -6,6 +6,7 @@ hybrid ledger (balance + quiz_history) with an idempotency guard, clears SOS deb
 returns per-question remediation for wrong answers (used by Learning Mode).
 """
 
+import uuid
 from datetime import UTC, datetime
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -18,6 +19,18 @@ from app.repos.quiz_repo import QuizAlreadySubmitted
 from app.services import supabase
 
 quiz_bp = Blueprint("quiz", __name__, url_prefix="/quiz")
+
+
+def _is_uuid(value: str) -> bool:
+    """True only for the canonical 8-4-4-4-12 form Postgres accepts.
+
+    uuid.UUID() alone is too lenient — it also parses urn:uuid:/braced/bare-hex
+    forms that Postgres's uuid cast rejects (which would surface as a 500).
+    """
+    try:
+        return str(uuid.UUID(value)) == value.lower()
+    except ValueError:
+        return False
 
 
 def _now_iso() -> str:
@@ -131,11 +144,20 @@ def submit_quiz():
         selected_index = answer.get("selected_index")
         if not isinstance(answer_id, str):
             return _error("validation_error", "answer.id must be a string", 400)
-        if selected_index is not None and not isinstance(selected_index, int):
+        # bool is a subclass of int in Python — reject it explicitly so JSON
+        # true/false can't be silently graded as index 1/0.
+        if selected_index is not None and (
+            isinstance(selected_index, bool) or not isinstance(selected_index, int)
+        ):
             return _error(
                 "validation_error", "selected_index must be an integer or null", 400
             )
         answer_map[answer_id] = selected_index
+
+    # A malformed id can't exist; answering 404 here also spares PostgREST a
+    # guaranteed uuid-cast error (which would surface as a 500).
+    if not _is_uuid(quiz_id):
+        return _error("not_found", "quiz not found", 404)
 
     quiz = quiz_repo.get_quiz(quiz_id, g.user_id)
     if quiz is None:

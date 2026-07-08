@@ -44,8 +44,6 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-example
-
-# generated native folders
-/ios
-/android
+# generated native folders (expo prebuild output lives under frontend/)
+/frontend/ios
+/frontend/android

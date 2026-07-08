@@ -34,28 +34,32 @@ Every non-2xx response uses this body:
 | 401 | `unauthorized` | missing/invalid/expired JWT |
 | 403 | `forbidden` | authenticated but not allowed |
 | 404 | `not_found` | resource does not exist / not owned by user |
-| 409 | `conflict` | e.g. SOS already used today |
+| 409 | `conflict` | e.g. quiz already submitted, email already registered, SOS already used today |
 | 500 | `internal_error` | unexpected server failure |
+| 502 | `upstream_error` | Supabase Auth returned a 5xx during register/login |
 
 ---
 
 ## Endpoint index
 
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| GET | `/health` | no | liveness check |
-| POST | `/auth/register` | no | create account |
-| POST | `/auth/login` | no | obtain JWT |
-| GET | `/profile` | yes | read profile |
-| PUT | `/profile` | yes | update profile |
-| POST | `/knowledge/import` | yes | import study material (text or link) |
-| GET | `/knowledge` | yes | list imported materials |
-| POST | `/quiz/generate` | yes | generate a quiz |
-| POST | `/quiz/submit` | yes | submit answers, earn time |
-| GET | `/screentime/balance` | yes | remaining earned seconds |
-| POST | `/sos` | yes | emergency unlock (once/day) |
-| GET | `/wakeup/status` | yes | is the morning lock active today |
-| POST | `/wakeup/complete` | yes | clear the morning lock |
+| Method | Path | Auth | Purpose | Status |
+|---|---|---|---|---|
+| GET | `/health` | no | liveness check | implemented |
+| POST | `/auth/register` | no | create account | implemented |
+| POST | `/auth/login` | no | obtain JWT | implemented |
+| GET | `/profile` | yes | read profile | implemented |
+| PUT | `/profile` | yes | update profile | implemented |
+| POST | `/knowledge/import` | yes | import study material (text or link) | **not yet implemented** |
+| GET | `/knowledge` | yes | list imported materials | **not yet implemented** |
+| POST | `/quiz/generate` | yes | generate a quiz | implemented (stub question bank) |
+| POST | `/quiz/submit` | yes | submit answers, earn time | implemented |
+| GET | `/screentime/balance` | yes | remaining earned seconds | **not yet implemented** |
+| POST | `/sos` | yes | emergency unlock (once/day) | **not yet implemented** |
+| GET | `/wakeup/status` | yes | is the morning lock active today | **not yet implemented** |
+| POST | `/wakeup/complete` | yes | clear the morning lock | **not yet implemented** |
+
+Endpoints marked *not yet implemented* are contract-only: the frontend mocks them and the
+backend has not shipped them yet.
 
 ---
 
@@ -93,7 +97,10 @@ Full JWT claim schema and rationale: [`docs/auth.md`](./auth.md).
   "token": "jwt"
 }
 ```
-**Errors:** `400 validation_error`, `409 conflict` (email exists).
+**Errors:** `400 validation_error` (missing fields, or `grade_or_age` not in the same
+whitelist `PUT /profile` enforces — a recognised grade like `Kindergarten`/`1st grade`…
+`12th grade`, or an age 5–18; the value is canonicalized before storage), `409 conflict`
+(email exists), `502 upstream_error` (Supabase Auth 5xx).
 
 ### `POST /auth/login`
 **Request**
@@ -107,7 +114,8 @@ Full JWT claim schema and rationale: [`docs/auth.md`](./auth.md).
   "token": "jwt"
 }
 ```
-**Errors:** `400 validation_error`, `401 unauthorized` (bad credentials).
+**Errors:** `400 validation_error`, `401 unauthorized` (bad credentials),
+`502 upstream_error` (Supabase Auth 5xx).
 
 > The `token` is stored client-side in `expo-secure-store` and sent as the Bearer token on
 > every subsequent request.
@@ -143,7 +151,8 @@ ignored if sent.
 **Response 200** — same shape as `GET /profile`.
 **Validation:** `focus_subjects` must be a non-empty subset of the known subject list
 (`Math`, `History`, `Biology`, `English`); `grade_or_age` must be a recognised grade/age.
-**Errors:** `400 validation_error`.
+**Errors:** `400 validation_error`, `404 not_found` (profile rows missing),
+`500 internal_error` (datastore failure). `GET /profile` can return the same `404`/`500`.
 
 ---
 
@@ -194,10 +203,43 @@ Lists the user's materials for the Knowledge Hub UI (newest first).
 ## 5. Quiz
 
 ### `POST /quiz/generate`
-Generates a quiz. `source` selects where questions come from. The **number of questions is
-decided by the server** (5 normally, 7 if `sos_debt_flag` is set) — clients must not assume 5.
+Generates a quiz. The **number of questions is decided by the server** — clients must not
+assume 5: `QUIZ_LEN_DEBT` (default 7) if the caller's `sos_debt_flag` is set, otherwise
+`QUIZ_LEN_NORMAL` (default 5).
 
-**Request** — one of three `source` values:
+**Request:** no body. The endpoint takes **no request fields** in the current
+implementation — the server decides everything from the caller's identity (JWT) and
+their debt flag. Questions currently come from a **stubbed static question bank**
+(`backend/app/quiz_content.py`), not from AI generation or imported materials.
+
+**Response 200**
+```json
+{
+  "quiz_id": "uuid",
+  "user_id": "uuid",
+  "question_count": 5,
+  "questions": [
+    {
+      "id": "q1",
+      "prompt": "What is 7 × 8?",
+      "options": ["54", "56", "48", "64"]
+    }
+  ],
+  "generated_at": "2026-07-06T09:15:00Z"
+}
+```
+> **Security:** the response deliberately **omits** `correct_index` and `explanation`.
+> Scoring happens on the server at submit time so answers can't be read from the payload.
+> The full quiz (including the answer key) is persisted server-side in the `quizzes` table.
+
+**Errors:** `401 unauthorized`. (No request body means no body validation errors today.)
+
+#### Future extension: `source` selection — **not yet implemented**
+
+The planned request body lets the client select where questions come from. **None of this
+is implemented yet** — the server currently ignores any request body. When it ships, the
+contract is:
+
 ```json
 { "source": "profile", "focus_subject": "Math" }
 ```
@@ -215,32 +257,16 @@ decided by the server** (5 normally, 7 if `sos_debt_flag` is set) — clients mu
   inline (`raw_text`), without first persisting a material. `focus_subject` optional.
   `raw_text` is capped at `KNOWLEDGE_MAX_CHARS`; longer input is rejected with `400`.
 
-**Response 200**
-```json
-{
-  "quiz_id": "uuid",
-  "source": "profile",
-  "question_count": 5,
-  "questions": [
-    {
-      "id": "q1",
-      "prompt": "What is 7 × 8?",
-      "options": ["54", "56", "48", "64"]
-    }
-  ]
-}
-```
-> **Security:** the response deliberately **omits** `correct_index` and `explanation`.
-> Scoring happens on the server at submit time so answers can't be read from the payload.
+The response would then also echo a `source` field, and add these errors:
+`400 validation_error` (bad source / missing `material_id` / missing or oversized
+`raw_text`), `404 not_found` (material not owned by user).
 
-**Errors:** `400 validation_error` (bad source / missing `material_id` / missing or
-oversized `raw_text`), `404 not_found` (material not owned by user).
+#### Internal data-interchange contract (text extraction → AI generator) — **not yet implemented**
 
-#### Internal data-interchange contract (text extraction → AI generator)
-
-This is the format the **knowledge/text-extraction module** hands to the **AI question
+This is the format the **knowledge/text-extraction module** will hand to the **AI question
 generator** module, regardless of which `source` triggered it. It is an internal boundary
 (not exposed over HTTP), but it is fixed here so P2 (extraction) and P1 (generation) agree.
+Neither module exists yet — the current stub bank replaces both.
 
 **Generator input**
 ```json
@@ -288,24 +314,36 @@ an `explanation` for every **wrong** answer (used by Learning Mode).
   "quiz_id": "uuid",
   "answers": [
     { "id": "q1", "selected_index": 1 },
-    { "id": "q2", "selected_index": 0 }
+    { "id": "q2", "selected_index": 0 },
+    { "id": "q3", "selected_index": null }
   ]
 }
 ```
+- `quiz_id` must be a **UUID string**. A malformed (non-UUID) `quiz_id` is answered with
+  `404 not_found` — a malformed id cannot exist, and this spares the datastore a
+  guaranteed uuid-cast error.
+- Each answer is `{ "id": string, "selected_index": integer | null }`. `null` means the
+  question was skipped (graded as wrong). JSON booleans (`true`/`false`) for
+  `selected_index` are **explicitly rejected** with `400 validation_error` — they must not
+  be silently graded as index 1/0.
+
 **Response 200**
 ```json
 {
   "quiz_id": "uuid",
+  "user_id": "uuid",
   "correct_count": 4,
   "total": 5,
   "earned_seconds": 720,
   "new_balance_seconds": 1320,
   "sos_debt_cleared": true,
   "results": [
-    { "id": "q1", "correct": true,  "correct_index": 1, "explanation": null },
-    { "id": "q2", "correct": false, "correct_index": 2,
+    { "id": "q1", "correct": true,  "selected_index": 1, "correct_index": 1,
+      "explanation": null },
+    { "id": "q2", "correct": false, "selected_index": 0, "correct_index": 2,
       "explanation": "6 × 8 is 48, not 40 — count by sixes: 6, 12, 18..." }
-  ]
+  ],
+  "submitted_at": "2026-07-06T09:20:00Z"
 }
 ```
 - `earned_seconds` is **linear per correct answer, capped at the full reward**:
@@ -380,9 +418,14 @@ Marks the 3 morning questions solved for today. Call after the user passes the w
 
 ## Database schema
 
-PostgreSQL on Supabase. Every table has **Row-Level Security** enabled with a policy of the
-form `user_id = auth.uid()` so a user can only see their own rows. Migrations are plain SQL,
-checked into `backend/migrations/`.
+PostgreSQL on Supabase. Every table has **Row-Level Security** enabled (and forced).
+Clients (the `authenticated` role) get owner-scoped **SELECT-only** access — policies of
+the form `(select auth.uid()) = user_id` — and their `INSERT`/`UPDATE`/`DELETE` privileges
+are **revoked**: all writes go through the backend's `service_role` key, which bypasses
+RLS. The `quizzes` table is stricter still: **deny-all** (no policies), because it stores
+the answer keys. Full policy matrix and rationale:
+[`backend/docs/rls.md`](../backend/docs/rls.md). Migrations are plain SQL, checked into
+`backend/migrations/`.
 
 ```sql
 -- users: app-level profile of the account (mirrors auth.users)
@@ -418,6 +461,15 @@ create table screentime_balance (
   updated_at        timestamptz not null default now()
 );
 
+-- quizzes: generated quizzes + answer keys (migration 0009) — deny-all RLS
+create table quizzes (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references users(id) on delete cascade,
+  questions    jsonb not null,  -- full items incl. correct_index; never exposed to clients
+  submitted_at timestamptz,     -- set on first score; idempotency guard for /quiz/submit
+  created_at   timestamptz not null default now()
+);
+
 -- quiz_history: audit of each completed quiz
 create table quiz_history (
   id             uuid primary key default gen_random_uuid(),
@@ -429,12 +481,18 @@ create table quiz_history (
 );
 ```
 
-RLS sketch (repeat per table):
+RLS sketch (repeat per table — read-only for clients, writes only via `service_role`):
 ```sql
 alter table profiles enable row level security;
-create policy "own rows" on profiles
-  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+alter table profiles force row level security;
+revoke insert, update, delete on profiles from authenticated;
+create policy "profiles_select_own" on profiles
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
 ```
+`quizzes` gets the same `revoke` + `enable`/`force` but **no policy at all** — deny-all
+for clients, since any exposed row would leak `questions[].correct_index`. (The Supabase
+advisor's INFO-level `rls_enabled_no_policy` lint on it is intentional.)
 
 ### Field ↔ endpoint map
 | Table.field | Set/used by |
@@ -443,6 +501,7 @@ create policy "own rows" on profiles
 | `profiles.sos_debt_flag` | set by `/sos`, read by `/quiz/generate`, cleared by `/quiz/submit` |
 | `profiles.last_sos_date` | enforces SOS once/day in `/sos` |
 | `profiles.wakeup_completed_date` | set by `/wakeup/complete`, read by `/wakeup/status` |
-| `profiles.focus_subjects` | set by `PUT /profile`, used by `/quiz/generate` (source=profile) |
-| `knowledge_materials` | written by `/knowledge/import`, listed by `/knowledge`, read by `/quiz/generate` (source=material) |
+| `profiles.focus_subjects` | set by `PUT /profile`; will be used by `/quiz/generate` (future `source=profile` — not yet implemented) |
+| `knowledge_materials` | written by `/knowledge/import`, listed by `/knowledge`; will be read by `/quiz/generate` (future `source=material` — not yet implemented) |
+| `quizzes` | written by `/quiz/generate` (questions + answer key); read and stamped (`submitted_at`) by `/quiz/submit` |
 | `quiz_history` | appended by `/quiz/submit` |

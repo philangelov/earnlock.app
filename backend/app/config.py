@@ -53,5 +53,7 @@ configs = {
 
 
 def get_config():
-    env = os.getenv("FLASK_ENV", "development")
-    return configs.get(env, DevelopmentConfig)
+    # Fail closed: anything other than an explicit "development" runs without DEBUG,
+    # so a deployment that forgets FLASK_ENV never exposes the Werkzeug debugger.
+    env = os.getenv("FLASK_ENV", "production")
+    return configs.get(env, ProductionConfig)

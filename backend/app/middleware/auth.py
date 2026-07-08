@@ -4,12 +4,17 @@ import jwt
 from flask import current_app, g, jsonify, request
 
 
+def _unauthorized(message):
+    """401 in the contract's error envelope (api-contract.md §2)."""
+    return jsonify({"error": {"code": "unauthorized", "message": message}}), 401
+
+
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
-            return jsonify({"error": "Missing or invalid Authorization header"}), 401
+            return _unauthorized("Missing or invalid Authorization header")
 
         token = auth_header.split(" ", 1)[1]
         try:
@@ -22,9 +27,9 @@ def require_auth(f):
             )
             g.user_id = payload["sub"]
         except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token expired"}), 401
+            return _unauthorized("Token expired")
         except (jwt.InvalidTokenError, jwt.PyJWKClientError):
-            return jsonify({"error": "Invalid token"}), 401
+            return _unauthorized("Invalid token")
 
         return f(*args, **kwargs)
 

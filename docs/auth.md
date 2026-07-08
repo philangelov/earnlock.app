@@ -36,8 +36,13 @@ These are dashboard-level settings, not something checked into code. Set under
    `on_auth_user_created` trigger ([`0007_new_user_provisioning.sql`](../backend/migrations/0007_new_user_provisioning.sql))
    and provisions `public.users` / `public.profiles` / `public.screentime_balance` in one
    transaction. `grade_or_age` is carried through as Supabase Auth signup metadata
-   (`options.data.grade_or_age`) so the trigger can read it via
+   (`data.grade_or_age` in the signup payload) so the trigger can read it via
    `raw_user_meta_data ->> 'grade_or_age'`.
+   ([`0011_hardening_and_email_sync.sql`](../backend/migrations/0011_hardening_and_email_sync.sql)
+   adds an `on_auth_user_email_changed` trigger that mirrors Supabase-side email
+   changes into `public.users.email`, so the provisioned row can't drift. Note: 0011 is
+   authored in the repo but **not yet applied to the live DB** — the applied set is
+   0001–0010.)
 4. Supabase returns an `access_token` (JWT) + `user` object. The backend re-shapes this
    into the EarnLock response contract (see §4) and returns it to the client.
 5. The client stores the JWT in `expo-secure-store` and sends it as
@@ -119,12 +124,19 @@ notes:
 
 - **`POST /auth/register`** — body: `email`, `password` (min 8 chars, enforced by
   Supabase), `grade_or_age`. `grade_or_age` is required by EarnLock (NOT NULL on
-  `public.users`) even though Supabase itself doesn't need it — the backend validates its
-  presence before calling Supabase.
+  `public.users`) even though Supabase itself doesn't need it — the backend validates it
+  before calling Supabase: presence **and** format, using the same whitelist as
+  `PUT /profile` (`backend/app/validation.py`: `Kindergarten`, `1st grade` … `12th grade`,
+  or an age 5–18; the value is canonicalized before it's stored).
 - **`POST /auth/login`** — body: `email`, `password`.
 - Both return `{ "user": { "id", "email", "grade_or_age" }, "token": "<jwt>" }` on
-  success. The frontend never decodes the JWT to get `grade_or_age` — it's flattened into
-  the response `user` object directly.
+  success (register `201`, login `200`). The frontend never decodes the JWT to get
+  `grade_or_age` — it's flattened into the response `user` object directly.
+- Failures use the contract's error envelope `{ "error": { "code", "message" } }`:
+  missing/invalid body or non-whitelisted `grade_or_age` → `400 validation_error`;
+  duplicate email on register → `409 conflict`; bad credentials on login →
+  `401 unauthorized`; Supabase Auth itself failing with a 5xx →
+  `502 upstream_error` ("auth service unavailable") rather than passing the 5xx through.
 - Client stores `token` in `expo-secure-store` and sends
   `Authorization: Bearer <token>` on every subsequent request. There is no separate
   refresh-token exchange exposed yet — when the access token expires the client
@@ -133,7 +145,9 @@ notes:
 
 ## 5. Backend validation checklist (for whoever writes/reviews `require_auth`)
 
-- [x] Reject requests with a missing/malformed `Authorization: Bearer <token>` header → 401.
+- [x] Reject requests with a missing/malformed `Authorization: Bearer <token>` header → 401,
+      in the contract's error envelope: `{"error": {"code": "unauthorized", "message": ...}}`
+      (all `require_auth` 401s use this shape).
 - [x] Resolve the signing key from Supabase's JWKS endpoint by the token's `kid`, verify
       with algorithm **ES256 only** (don't accept `none` or HS256 — `pyjwt`'s
       `algorithms=` allowlist enforces this; a stale/legacy HS256 token would be rejected,

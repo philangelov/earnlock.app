@@ -113,3 +113,29 @@ def test_login_rejects_bad_credentials(client):
 
     assert res.status_code == 401
     assert res.get_json()["error"]["code"] == "unauthorized"
+
+
+def test_register_rejects_invalid_grade_or_age(client):
+    """grade_or_age goes through the same whitelist as PUT /profile."""
+    res = client.post(
+        "/auth/register",
+        json={
+            "email": "kid@example.com",
+            "password": "password123",
+            "grade_or_age": "definitely-not-a-grade",
+        },
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"]["code"] == "validation_error"
+
+
+def test_login_unreachable_auth_service_maps_to_502(client):
+    """URLError/timeout must return the JSON envelope, never Flask's HTML 500."""
+    error = auth_module.urllib.error.URLError("connection refused")
+    with patch.object(auth_module.urllib.request, "urlopen", side_effect=error):
+        res = client.post(
+            "/auth/login",
+            json={"email": "kid@example.com", "password": "password123"},
+        )
+    assert res.status_code == 502
+    assert res.get_json()["error"]["code"] == "upstream_error"

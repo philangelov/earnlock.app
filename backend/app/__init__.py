@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from jwt import PyJWKClient
 
@@ -9,6 +9,7 @@ from app.routes.knowledge import knowledge_bp
 from app.routes.profile import profile_bp
 from app.routes.quiz import quiz_bp
 from app.routes.screentime import screentime_bp
+from app.services.supabase import SupabaseError
 
 
 def create_app():
@@ -27,5 +28,18 @@ def create_app():
     app.register_blueprint(profile_bp)
     app.register_blueprint(quiz_bp)
     app.register_blueprint(screentime_bp)
+
+    @app.errorhandler(SupabaseError)
+    def handle_supabase_error(exc):
+        # Keep every failure in the contract's JSON envelope — never Flask's HTML 500.
+        app.logger.error("Supabase request failed: %s", exc)
+        return jsonify(
+            {
+                "error": {
+                    "code": "internal_error",
+                    "message": "Upstream data store error.",
+                }
+            }
+        ), 500
 
     return app

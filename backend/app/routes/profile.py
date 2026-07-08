@@ -42,6 +42,13 @@ def get_profile():
 @profile_bp.put("")
 @require_auth
 def update_profile():
+    """Partial profile update (grade_or_age and/or focus_subjects).
+
+    Known limitation: the two writes go to different tables as separate PostgREST
+    PATCHes, so they are not atomic — if the second fails the first stays committed
+    and the client sees a 500. Acceptable for these low-stakes preference fields;
+    an RPC would be needed to make the pair transactional.
+    """
     user_id = g.user_id
     body = request.get_json(silent=True)
 

@@ -5,6 +5,8 @@ the real route logic — grading, reward math, remediation, debt, idempotency �
 live Supabase project. Answer keys are recomputed from the deterministic question bank.
 """
 
+import uuid
+
 import pytest
 
 from app.quiz_content import build_questions
@@ -15,12 +17,15 @@ from tests.conftest import TEST_USER_ID
 
 @pytest.fixture
 def fake_db(monkeypatch):
-    """In-memory stand-in for quiz_repo, monkeypatched into the route module."""
-    state = {"quizzes": {}, "debt": {}, "balance": {}, "n": 0}
+    """In-memory stand-in for quiz_repo, monkeypatched into the route module.
+
+    Quiz ids are real UUID strings, matching production (quizzes.id is uuid) — the
+    route rejects malformed ids before ever hitting the repo.
+    """
+    state = {"quizzes": {}, "debt": {}, "balance": {}}
 
     def create_quiz(user_id, questions):
-        state["n"] += 1
-        quiz_id = f"quiz-{state['n']}"
+        quiz_id = str(uuid.uuid4())
         state["quizzes"][quiz_id] = {
             "id": quiz_id,
             "user_id": user_id,
@@ -211,10 +216,30 @@ def test_concurrent_race_caught_by_atomic_guard(
 
 
 def test_submit_unknown_quiz_returns_404(client, auth_headers, fake_db):
+    """A well-formed id that simply doesn't exist → 404 from the repo lookup."""
+    resp = _submit(
+        client, auth_headers, str(uuid.uuid4()), [{"id": "q1", "selected_index": 0}]
+    )
+    assert resp.status_code == 404
+
+
+def test_submit_malformed_quiz_id_returns_404(client, auth_headers, fake_db):
+    """A non-UUID id can't exist; it must 404 without reaching PostgREST."""
     resp = _submit(
         client, auth_headers, "does-not-exist", [{"id": "q1", "selected_index": 0}]
     )
     assert resp.status_code == 404
+    assert resp.get_json()["error"]["code"] == "not_found"
+
+
+def test_submit_boolean_selected_index_rejected(client, auth_headers, fake_db):
+    """JSON true/false must not be graded as index 1/0 (bool subclasses int)."""
+    quiz = _generate(client, auth_headers)
+    resp = _submit(
+        client, auth_headers, quiz["quiz_id"], [{"id": "q1", "selected_index": True}]
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]["code"] == "validation_error"
 
 
 def test_submit_validation_error(client, auth_headers, fake_db):

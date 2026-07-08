@@ -4,7 +4,11 @@ import urllib.request
 
 from flask import Blueprint, current_app, jsonify, request
 
+from app.validation import ValidationError, validate_grade_or_age
+
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
+
+_UPSTREAM_TIMEOUT_SECONDS = 10
 
 
 def _supabase_auth_request(path, payload):
@@ -19,10 +23,17 @@ def _supabase_auth_request(path, payload):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req) as res:
+        with urllib.request.urlopen(req, timeout=_UPSTREAM_TIMEOUT_SECONDS) as res:
             return json.loads(res.read()), res.status
     except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
+        # Upstream error bodies are usually JSON, but 5xx gateway pages may not be.
+        try:
+            return json.loads(e.read()), e.code
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return {"msg": "upstream auth service error"}, e.code
+    except (urllib.error.URLError, TimeoutError):
+        # Unreachable / timed out — surface as a 5xx so callers map it to 502.
+        return {"msg": "auth service unreachable"}, 503
 
 
 def _error(code, message, status):
@@ -41,11 +52,19 @@ def register():
             "validation_error", "email, password and grade_or_age are required", 400
         )
 
+    # Same whitelist PUT /profile enforces, so users.grade_or_age stays canonical.
+    try:
+        grade_or_age = validate_grade_or_age(grade_or_age)
+    except ValidationError as exc:
+        return _error("validation_error", str(exc), 400)
+
     data, status = _supabase_auth_request(
         "signup",
         {"email": email, "password": password, "data": {"grade_or_age": grade_or_age}},
     )
 
+    if status >= 500:
+        return _error("upstream_error", "auth service unavailable", 502)
     if status >= 400:
         message = (
             data.get("msg") or data.get("error_description") or "registration failed"
@@ -79,6 +98,8 @@ def login():
         {"email": email, "password": password},
     )
 
+    if status >= 500:
+        return _error("upstream_error", "auth service unavailable", 502)
     if status >= 400:
         return _error("unauthorized", "invalid email or password", 401)
 

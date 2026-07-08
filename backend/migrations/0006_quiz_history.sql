@@ -4,9 +4,10 @@
 -- One row per submitted quiz, appended by POST /quiz/submit. Records how many answers
 -- were correct and how many seconds were earned, for progress/metrics over time.
 --
--- Note: quizzes themselves are ephemeral (generated on demand by the backend and not
--- persisted as their own table), so `quiz_id` is a plain UUID reference to that
--- generated quiz rather than a foreign key.
+-- Note: at the time of this migration quizzes were ephemeral, so `quiz_id` was a plain
+-- UUID with no foreign key. Migration 0009 later persisted quizzes in their own table;
+-- 0011 updates this column's comment accordingly (the FK is still intentionally absent
+-- so history survives any future quiz-row cleanup).
 
 create table if not exists public.quiz_history (
   id             uuid        primary key default gen_random_uuid(),

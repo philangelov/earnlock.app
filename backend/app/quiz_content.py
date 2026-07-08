@@ -53,12 +53,18 @@ QUESTION_BANK: list[dict] = [
 
 
 def build_questions(count: int) -> list[dict]:
-    """Full quiz items (with answer keys), ids q1..qN, for the given length."""
+    """Full quiz items (with answer keys), ids q1..qN, for the given length.
+
+    Cycles through the bank when count exceeds it, so a configured quiz length
+    (QUIZ_LEN_NORMAL / QUIZ_LEN_DEBT) is always honored rather than silently
+    truncated to the bank size.
+    """
     items = []
-    for i, q in enumerate(QUESTION_BANK[:count], start=1):
+    for i in range(count):
+        q = QUESTION_BANK[i % len(QUESTION_BANK)]
         items.append(
             {
-                "id": f"q{i}",
+                "id": f"q{i + 1}",
                 "prompt": q["prompt"],
                 "options": q["options"],
                 "correct_index": q["correct_index"],
