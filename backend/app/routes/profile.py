@@ -54,9 +54,7 @@ def update_profile():
         if user_fields:
             supabase.update_user_grade(user_id, user_fields["grade_or_age"])
         if profile_fields:
-            supabase.update_profile_subjects(
-                user_id, profile_fields["focus_subjects"]
-            )
+            supabase.update_profile_subjects(user_id, profile_fields["focus_subjects"])
 
         grade_or_age = supabase.get_user_grade(user_id)
         profile_row = supabase.get_profile_row(user_id)

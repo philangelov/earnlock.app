@@ -27,4 +27,5 @@ def require_auth(f):
             return jsonify({"error": "Invalid token"}), 401
 
         return f(*args, **kwargs)
+
     return decorated

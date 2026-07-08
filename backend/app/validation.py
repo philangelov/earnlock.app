@@ -80,9 +80,7 @@ def validate_grade_or_age(value):
         age = int(match.group(1))
         if MIN_AGE <= age <= MAX_AGE:
             return f"Age {age}"
-        raise ValidationError(
-            f"age must be between {MIN_AGE} and {MAX_AGE}."
-        )
+        raise ValidationError(f"age must be between {MIN_AGE} and {MAX_AGE}.")
 
     raise ValidationError(
         "grade_or_age must be a recognised grade "
@@ -112,8 +110,6 @@ def validate_profile_update(body):
         )
 
     if not user_fields and not profile_fields:
-        raise ValidationError(
-            "Provide at least one of: grade_or_age, focus_subjects."
-        )
+        raise ValidationError("Provide at least one of: grade_or_age, focus_subjects.")
 
     return user_fields, profile_fields

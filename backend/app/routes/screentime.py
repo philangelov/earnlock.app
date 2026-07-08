@@ -21,9 +21,14 @@ def get_balance():
     try:
         row = supabase.get_screentime_balance(g.user_id)
     except supabase.SupabaseError:
-        return jsonify({"error": {
-            "code": "internal_error", "message": "Could not read balance.",
-        }}), 500
+        return jsonify(
+            {
+                "error": {
+                    "code": "internal_error",
+                    "message": "Could not read balance.",
+                }
+            }
+        ), 500
 
     if row is None:
         return jsonify({"remaining_seconds": 0, "updated_at": None}), 200

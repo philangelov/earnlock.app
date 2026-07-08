@@ -34,6 +34,7 @@ def auth_headers():
 
 # --- Validation unit tests ------------------------------------------------------
 
+
 def test_subjects_reject_empty():
     with pytest.raises(ValidationError):
         validate_focus_subjects([])
@@ -77,9 +78,11 @@ def test_update_ignores_server_managed_fields():
 
 # --- Route tests ----------------------------------------------------------------
 
+
 def test_get_profile_returns_merged_shape(client, auth_headers):
     with patch.multiple(
-        SVC, get_user_grade=lambda _: "5th grade",
+        SVC,
+        get_user_grade=lambda _: "5th grade",
         get_profile_row=lambda _: _PROFILE_ROW,
     ):
         res = client.get("/profile", headers=auth_headers)
@@ -111,10 +114,12 @@ def test_put_profile_rejects_bad_subject(client, auth_headers):
 
 def test_put_profile_persists_and_returns_updated(client, auth_headers):
     updated = {**_PROFILE_ROW, "focus_subjects": ["Math", "Biology", "English"]}
-    with patch(f"{SVC}.update_user_grade") as up_user, \
-         patch(f"{SVC}.update_profile_subjects") as up_prof, \
-         patch(f"{SVC}.get_user_grade", return_value="6th grade"), \
-         patch(f"{SVC}.get_profile_row", return_value=updated):
+    with (
+        patch(f"{SVC}.update_user_grade") as up_user,
+        patch(f"{SVC}.update_profile_subjects") as up_prof,
+        patch(f"{SVC}.get_user_grade", return_value="6th grade"),
+        patch(f"{SVC}.get_profile_row", return_value=updated),
+    ):
         res = client.put(
             "/profile",
             headers=auth_headers,
@@ -132,10 +137,12 @@ def test_put_profile_persists_and_returns_updated(client, auth_headers):
 
 
 def test_put_profile_partial_only_touches_provided_table(client, auth_headers):
-    with patch(f"{SVC}.update_user_grade") as up_user, \
-         patch(f"{SVC}.update_profile_subjects") as up_prof, \
-         patch(f"{SVC}.get_user_grade", return_value="5th grade"), \
-         patch(f"{SVC}.get_profile_row", return_value=_PROFILE_ROW):
+    with (
+        patch(f"{SVC}.update_user_grade") as up_user,
+        patch(f"{SVC}.update_profile_subjects") as up_prof,
+        patch(f"{SVC}.get_user_grade", return_value="5th grade"),
+        patch(f"{SVC}.get_profile_row", return_value=_PROFILE_ROW),
+    ):
         res = client.put(
             "/profile", headers=auth_headers, json={"focus_subjects": ["Math"]}
         )

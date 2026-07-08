@@ -53,14 +53,16 @@ def register():
         code = "conflict" if "already" in message.lower() else "validation_error"
         return _error(code, message, 409 if code == "conflict" else 400)
 
-    return jsonify({
-        "user": {
-            "id": data["user"]["id"],
-            "email": data["user"]["email"],
-            "grade_or_age": grade_or_age,
-        },
-        "token": data["access_token"],
-    }), 201
+    return jsonify(
+        {
+            "user": {
+                "id": data["user"]["id"],
+                "email": data["user"]["email"],
+                "grade_or_age": grade_or_age,
+            },
+            "token": data["access_token"],
+        }
+    ), 201
 
 
 @auth_bp.post("/login")
@@ -80,11 +82,15 @@ def login():
     if status >= 400:
         return _error("unauthorized", "invalid email or password", 401)
 
-    return jsonify({
-        "user": {
-            "id": data["user"]["id"],
-            "email": data["user"]["email"],
-            "grade_or_age": data["user"].get("user_metadata", {}).get("grade_or_age"),
-        },
-        "token": data["access_token"],
-    }), 200
+    return jsonify(
+        {
+            "user": {
+                "id": data["user"]["id"],
+                "email": data["user"]["email"],
+                "grade_or_age": data["user"]
+                .get("user_metadata", {})
+                .get("grade_or_age"),
+            },
+            "token": data["access_token"],
+        }
+    ), 200
