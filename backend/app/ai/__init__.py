@@ -1,4 +1,9 @@
-from app.ai.explainer import DummyExplainer, Explainer, get_explainer
+from app.ai.explainer import (
+    ClaudeExplainer,
+    DummyExplainer,
+    Explainer,
+    get_explainer,
+)
 from app.ai.generator import (
     ClaudeQuestionGenerator,
     DummyQuestionGenerator,
@@ -12,6 +17,7 @@ from app.ai.generator import (
 __all__ = [
     "Explainer",
     "DummyExplainer",
+    "ClaudeExplainer",
     "get_explainer",
     "QuestionGenerator",
     "DummyQuestionGenerator",
