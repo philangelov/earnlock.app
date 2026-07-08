@@ -44,6 +44,11 @@ def _rest_request(method, path, *, params=None, body=None, prefer=None):
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
         raise SupabaseError(f"PostgREST {method} {path} failed ({e.code}): {detail}")
+    except urllib.error.URLError as e:
+        # Connection-level failure (DNS, refused, timeout). HTTPError is a subclass of
+        # URLError, so this branch only handles the transport errors — surfaced as a
+        # SupabaseError so callers' `except SupabaseError` handles them uniformly.
+        raise SupabaseError(f"PostgREST {method} {path} connection failed: {e.reason}")
 
 
 def get_user_grade(user_id):

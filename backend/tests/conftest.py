@@ -5,6 +5,10 @@ import pytest
 os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key-for-ci")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key-for-ci")
+# Force the offline generator in tests: an empty value keeps load_dotenv() (which reads
+# a developer's real .env) from wiring the AI path into the suite. Tests that exercise
+# the Claude path inject a fake generator explicitly.
+os.environ.setdefault("ANTHROPIC_API_KEY", "")
 from app import create_app
 
 TEST_USER_ID = "user-123"

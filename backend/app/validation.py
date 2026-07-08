@@ -88,6 +88,33 @@ def validate_grade_or_age(value):
     )
 
 
+def validate_knowledge_import(body, max_chars):
+    """Validate a POST /knowledge/import body.
+
+    Accepts ``text`` (the study material, required) and an optional ``source_type``
+    ('text' | 'link'; default 'text'). Whitespace is collapsed and the text is capped at
+    ``max_chars`` (per the knowledge_materials contract, migration 0004). Returns
+    ``(raw_text, source_type)`` or raises ValidationError.
+    """
+    if not isinstance(body, dict):
+        raise ValidationError("Request body must be a JSON object.")
+
+    text = body.get("text")
+    if not isinstance(text, str) or not text.strip():
+        raise ValidationError("text must be a non-empty string.")
+
+    source_type = body.get("source_type", "text")
+    if source_type not in ("text", "link"):
+        raise ValidationError("source_type must be 'text' or 'link'.")
+
+    # Normalize: collapse runs of whitespace, then cap length.
+    normalized = re.sub(r"\s+", " ", text).strip()
+    if len(normalized) > max_chars:
+        normalized = normalized[:max_chars].rstrip()
+
+    return normalized, source_type
+
+
 def validate_profile_update(body):
     """Validate a PUT /profile body (partial patch).
 

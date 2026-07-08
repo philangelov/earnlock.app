@@ -10,11 +10,12 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, current_app, g, jsonify, request
 
-from app.ai import get_explainer
+from app.ai import generate_quiz_questions, get_explainer
 from app.middleware.auth import require_auth
-from app.quiz_content import build_questions, public_view
-from app.repos import quiz_repo
+from app.quiz_content import public_view
+from app.repos import knowledge_repo, quiz_repo
 from app.repos.quiz_repo import QuizAlreadySubmitted
+from app.services import supabase
 
 quiz_bp = Blueprint("quiz", __name__, url_prefix="/quiz")
 
@@ -35,21 +36,76 @@ def _reward_seconds(correct_count: int) -> int:
     return min(correct_count, target) * seconds_per_correct
 
 
+def _profile_context(user_id):
+    """Best-effort (grade_or_age, focus_subjects) for personalizing generation.
+
+    Personalization is optional: if the profile can't be read, generation still
+    proceeds with a general quiz rather than failing the request.
+    """
+    try:
+        grade_or_age = supabase.get_user_grade(user_id)
+        profile = supabase.get_profile_row(user_id)
+    except supabase.SupabaseError:
+        return None, None
+    subjects = profile["focus_subjects"] if profile else None
+    return grade_or_age, subjects
+
+
 @quiz_bp.post("/generate")
 @require_auth
 def generate_quiz():
+    payload = request.get_json(silent=True) or {}
+    source = payload.get("source", "profile")
+    if source not in ("profile", "material", "text"):
+        return _error(
+            "validation_error", "source must be 'profile', 'material' or 'text'", 400
+        )
+
     has_debt = quiz_repo.get_debt_flag(g.user_id)
     question_count = (
         current_app.config["QUIZ_LEN_DEBT"]
         if has_debt
         else current_app.config["QUIZ_LEN_NORMAL"]
     )
-    questions = build_questions(question_count)
+    locale = request.headers.get("Accept-Language", "en").split(",")[0] or "en"
+
+    # Resolve the generation context from the requested source.
+    subjects = None
+    material_text = None
+    grade_or_age, subjects = _profile_context(g.user_id)
+
+    if source == "material":
+        material_id = payload.get("material_id")
+        if not isinstance(material_id, str) or not material_id:
+            return _error(
+                "validation_error", "material_id is required for source=material", 400
+            )
+        try:
+            material = knowledge_repo.get_material(material_id, g.user_id)
+        except supabase.SupabaseError:
+            return _error("internal_error", "Could not read material.", 500)
+        if material is None:
+            return _error("not_found", "material not found", 404)
+        material_text = material["raw_text"]
+    elif source == "text":
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return _error("validation_error", "text is required for source=text", 400)
+        material_text = text.strip()[: current_app.config["KNOWLEDGE_MAX_CHARS"]]
+
+    questions = generate_quiz_questions(
+        count=question_count,
+        subjects=subjects,
+        grade_or_age=grade_or_age,
+        material_text=material_text,
+        locale=locale,
+    )
     quiz_id = quiz_repo.create_quiz(g.user_id, questions)
     return jsonify(
         {
             "quiz_id": quiz_id,
             "user_id": g.user_id,
+            "source": source,
             "question_count": len(questions),
             "questions": public_view(questions),  # answers omitted (security)
             "generated_at": _now_iso(),
