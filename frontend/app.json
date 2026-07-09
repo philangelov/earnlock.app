@@ -38,6 +38,9 @@
     },
     "ios": {
       "bundleIdentifier": "com.filipangelov.earnlock"
+    },
+    "extra": {
+      "apiUrl": "http://localhost:5000"
     }
   }
 }

@@ -1,74 +1,93 @@
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
-import Animated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type ViewStyle,
+} from 'react-native';
+import Animated, { LinearTransition } from 'react-native-reanimated';
 
 import { Button } from '@/components/Button';
 import { Screen } from '@/components/Screen';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
-import { MC_COUNT, QUESTIONS } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
 import { useTokens } from '@/theme/theme';
 
+// The backend never sends correct_index until the whole quiz is submitted
+// (docs/api-contract.md — "answers can't be read from the payload"), so there is no
+// per-question reveal here: pick an answer for every question, then submit once at the
+// end. Correctness and explanations only exist after that, on the results screen.
 export default function QuizScreen() {
   const t = useTokens();
   const router = useRouter();
 
+  const quizQuestions = useEarnLock((s) => s.quizQuestions);
   const qIndex = useEarnLock((s) => s.qIndex);
   const selected = useEarnLock((s) => s.selected);
-  const checked = useEarnLock((s) => s.checked);
+  const quizError = useEarnLock((s) => s.quizError);
+  const beginQuiz = useEarnLock((s) => s.beginQuiz);
   const pick = useEarnLock((s) => s.pick);
-  const check = useEarnLock((s) => s.check);
   const nextQuestion = useEarnLock((s) => s.nextQuestion);
+  const submitQuizNow = useEarnLock((s) => s.submitQuizNow);
 
-  const q = QUESTIONS[Math.min(qIndex, QUESTIONS.length - 1)];
-  const correct = selected === q.answer;
-  // Only a *correct* answer advances progress — a wrong one shouldn't bump the bar then regress
-  // after the learn-and-retry loop.
-  const qProg = Math.min(1, (qIndex + (checked && correct ? 1 : 0)) / (MC_COUNT + 1));
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current || quizQuestions.length > 0) return;
+    started.current = true;
+    beginQuiz();
+  }, [beginQuiz, quizQuestions.length]);
 
-  const onButton = () => {
-    if (!checked) {
-      if (correct) haptic.success();
-      else haptic.error();
-      check();
+  const q = quizQuestions[qIndex];
+  const isLast = qIndex + 1 >= quizQuestions.length;
+  const qProg = quizQuestions.length > 0 ? qIndex / quizQuestions.length : 0;
+
+  const onButton = async () => {
+    haptic.select();
+    if (!isLast) {
+      nextQuestion();
       return;
     }
-    if (selected !== q.answer) {
-      router.replace('/learning');
-      return;
-    }
-    // Route to recap BEFORE advancing so the reset question can't flash for a frame.
-    if (qIndex + 1 >= MC_COUNT) {
-      router.replace('/recap');
-      return;
-    }
-    nextQuestion();
+    const ok = await submitQuizNow();
+    if (!ok) return;
+    // Read fresh from the store, not the hook-bound `quizResults` above — that variable
+    // was captured at the last render (before submit), so it's still stale/null here.
+    const results = useEarnLock.getState().quizResults ?? [];
+    const hasMisses = results.some((r) => !r.correct);
+    router.replace(hasMisses ? '/learning' : '/recap');
   };
 
-  const btnLabel = checked ? (correct ? 'Continue' : 'See why') : 'Check answer';
+  const optStyle = (i: number): ViewStyle =>
+    selected === i
+      ? { borderColor: t.accent, backgroundColor: t.accentSoft }
+      : { borderColor: t.separator, backgroundColor: t.surface };
 
-  const optStyle = (i: number): ViewStyle => {
-    const isAnswer = i === q.answer;
-    const isPicked = selected === i;
-    if (!checked) {
-      return isPicked
-        ? { borderColor: t.accent, backgroundColor: t.accentSoft }
-        : { borderColor: t.separator, backgroundColor: t.surface };
-    }
-    if (isAnswer) return { borderColor: t.accent, backgroundColor: t.accentSoft };
-    if (isPicked) return { borderColor: t.danger, backgroundColor: t.dangerSoft };
-    return { borderColor: t.separator, backgroundColor: t.surface, opacity: 0.5 };
-  };
-
-  const optBadge = (i: number) => {
-    if (!checked) return null;
-    if (i === q.answer) return <Sym name="checkmark.circle.fill" size={22} color={t.accentText} />;
-    if (selected === i) return <Sym name="xmark.circle.fill" size={22} color={t.danger} />;
-    return <View style={styles.badgeSpacer} />;
-  };
+  if (quizQuestions.length === 0) {
+    return (
+      <Screen bottomInset>
+        <View style={styles.center}>
+          {quizError ? (
+            <>
+              <Text style={[Type.body, { color: t.danger, textAlign: 'center' }]}>{quizError}</Text>
+              <Button
+                label="Try again"
+                onPress={() => beginQuiz()}
+                style={{ marginTop: Space.lg }}
+              />
+            </>
+          ) : (
+            <ActivityIndicator color={t.accent} />
+          )}
+        </View>
+      </Screen>
+    );
+  }
 
   return (
     <Screen bottomInset>
@@ -112,42 +131,21 @@ export default function QuizScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={[Type.overline, { color: t.accentText, textTransform: 'uppercase' }]}>
-          {q.tag}
+          Question {qIndex + 1} of {quizQuestions.length}
         </Text>
-        <Text style={[Type.title1, { color: t.text, marginTop: Space.sm }]}>{q.q}</Text>
+        <Text style={[Type.title1, { color: t.text, marginTop: Space.sm }]}>{q.prompt}</Text>
 
         <View style={styles.options}>
-          {q.opts.map((opt, i) => (
+          {q.options.map((opt, i) => (
             <Pressable
               key={i}
               accessibilityRole="button"
-              accessibilityLabel={opt.t}
-              accessibilityState={{
-                selected: selected === i,
-                disabled: checked,
-              }}
-              accessibilityHint={
-                checked
-                  ? i === q.answer
-                    ? 'Correct answer'
-                    : selected === i
-                      ? 'Your answer, incorrect'
-                      : undefined
-                  : undefined
-              }
-              onPress={() => {
-                haptic.select();
-                pick(i);
-              }}
-              style={({ pressed }) => [
-                styles.opt,
-                optStyle(i),
-                pressed && !checked && styles.pressScale,
-              ]}
+              accessibilityLabel={opt}
+              accessibilityState={{ selected: selected === i }}
+              onPress={() => pick(i)}
+              style={({ pressed }) => [styles.opt, optStyle(i), pressed && styles.pressScale]}
             >
-              <Text style={styles.emoji}>{opt.e}</Text>
-              <Text style={[Type.bodyStrong, styles.optText, { color: t.text }]}>{opt.t}</Text>
-              {optBadge(i)}
+              <Text style={[Type.bodyStrong, styles.optText, { color: t.text }]}>{opt}</Text>
             </Pressable>
           ))}
         </View>
@@ -155,25 +153,11 @@ export default function QuizScreen() {
 
       {/* Footer */}
       <View style={styles.footer}>
-        {checked && (
-          <Animated.View
-            entering={FadeInDown.duration(200)}
-            accessibilityLiveRegion="polite"
-            style={[styles.fb, { backgroundColor: correct ? t.accentSoft : t.dangerSoft }]}
-          >
-            <Sym
-              name={correct ? 'checkmark.circle.fill' : 'info.circle.fill'}
-              size={17}
-              color={correct ? t.accentText : t.danger}
-            />
-            <Text
-              style={[Type.subheadStrong, { color: correct ? t.accentText : t.danger, flex: 1 }]}
-            >
-              {correct ? 'Correct — nice one!' : 'Not quite — let’s learn why.'}
-            </Text>
-          </Animated.View>
-        )}
-        <Button label={btnLabel} disabled={!(checked || selected != null)} onPress={onButton} />
+        <Button
+          label={isLast ? 'Submit quiz' : 'Next question'}
+          disabled={selected == null}
+          onPress={onButton}
+        />
       </View>
     </Screen>
   );
@@ -203,19 +187,9 @@ const styles = StyleSheet.create({
     borderCurve: 'continuous',
     borderWidth: 1.5,
   },
-  emoji: { fontSize: 24 },
   optText: { flex: 1 },
-  badgeSpacer: { width: 22, height: 22 },
   pressScale: { transform: [{ scale: 0.98 }] },
 
   footer: { paddingHorizontal: Space.xl, paddingTop: Space.sm, gap: Space.md },
-  fb: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: Radius.control,
-    borderCurve: 'continuous',
-  },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Space.xl },
 });

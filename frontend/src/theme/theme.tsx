@@ -43,7 +43,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // UIKit trait collection to match it so native chrome the JS theme can't reach —
   // the tab bar, form-sheet grabber/dim, keyboard — follows the toggle too (not the
   // device system setting). Reset to system on unmount.
+  // react-native-web has no native trait collection to set — Appearance.setColorScheme
+  // isn't implemented there and throws, so this is native-only (iOS/Android).
   useEffect(() => {
+    if (process.env.EXPO_OS === 'web') return;
     Appearance.setColorScheme(dark ? 'dark' : 'light');
     return () => Appearance.setColorScheme('unspecified');
   }, [dark]);

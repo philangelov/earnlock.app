@@ -24,6 +24,8 @@ export default function MaterialScreen() {
   const uploadName = useEarnLock((s) => s.uploadName);
   const setUploadName = useEarnLock((s) => s.setUploadName);
   const doImport = useEarnLock((s) => s.doImport);
+  const importLoading = useEarnLock((s) => s.importLoading);
+  const importError = useEarnLock((s) => s.importError);
   const onboarded = useEarnLock((s) => s.onboarded);
 
   const canContinue = importText.trim().length > 0 || uploadName.length > 0;
@@ -37,8 +39,9 @@ export default function MaterialScreen() {
     if (!res.canceled && res.assets[0]) setUploadName(res.assets[0].name);
   };
 
-  const onContinue = () => {
-    doImport();
+  const onContinue = async () => {
+    const ok = await doImport();
+    if (!ok) return;
     if (onboarded) router.back();
     else router.push('/apps');
   };
@@ -60,14 +63,17 @@ export default function MaterialScreen() {
       }
       footer={
         <Button
-          label={onboarded ? 'Save' : 'Generate questions'}
-          disabled={!canContinue}
+          label={importLoading ? 'Saving…' : onboarded ? 'Save' : 'Generate questions'}
+          disabled={!canContinue || importLoading}
           onPress={onContinue}
         />
       }
       footerStyle={styles.footer}
     >
       <Text style={[Type.title1, styles.heading, { color: t.text }]}>Add your material</Text>
+      {importError && (
+        <Text style={[Type.footnote, styles.error, { color: t.danger }]}>{importError}</Text>
+      )}
       <Text style={[Type.subhead, styles.sub, { color: t.text2 }]}>
         Paste notes or upload a worksheet — questions are generated from your own content.
       </Text>
@@ -142,6 +148,7 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: Space.xl, paddingTop: Space.sm },
   content: { paddingHorizontal: Space.xl, paddingBottom: Space.xxl },
   footer: { paddingHorizontal: Space.xl, paddingTop: Space.md },
+  error: { textAlign: 'center', marginTop: Space.sm },
 
   heading: { textAlign: 'center', marginTop: Space.xl },
   sub: { textAlign: 'center', marginTop: 8 },

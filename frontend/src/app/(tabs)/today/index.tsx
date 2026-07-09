@@ -25,6 +25,7 @@ export default function TodayScreen() {
   const debt = useEarnLock((s) => s.debt);
   const sosUsed = useEarnLock((s) => s.sosUsed);
   const resetQuizFlow = useEarnLock((s) => s.resetQuizFlow);
+  const fetchBalance = useEarnLock((s) => s.fetchBalance);
 
   const available = useScreenTime((s) => s.available);
   const status = useScreenTime((s) => s.status);
@@ -34,7 +35,11 @@ export default function TodayScreen() {
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    // Sync the server-authoritative balance on mount (e.g. app reopened on a fresh
+    // session) — the locally-held unlockUntil only reflects the last submit otherwise,
+    // which goes stale the moment time has actually elapsed server-side.
+    fetchBalance();
+  }, [refresh, fetchBalance]);
 
   const startQuiz = () => {
     resetQuizFlow();

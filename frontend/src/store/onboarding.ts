@@ -142,6 +142,13 @@ export function gradeForAge(age: number): number {
   return Math.min(12, Math.max(1, age - 6));
 }
 
+const GRADE_ORDINALS = ['1st', '2nd', '3rd', ...Array.from({ length: 9 }, (_, i) => `${i + 4}th`)];
+
+/** "8th grade" — the exact string shape the backend's grade_or_age validation accepts. */
+export function gradeLabel(grade: number): string {
+  return `${GRADE_ORDINALS[Math.min(12, Math.max(1, grade)) - 1]} grade`;
+}
+
 /* --------------------------------------------------------------- phone hours */
 
 export const HOURS_MIN = 1;
