@@ -10,6 +10,7 @@ simply never forwards them to the DB layer.
 """
 
 import re
+import uuid
 
 from app.text_extraction import is_valid_http_url
 
@@ -41,6 +42,19 @@ _AGE_RE = re.compile(r"^(?:age\s+)?(\d{1,2})$", re.IGNORECASE)
 
 class ValidationError(Exception):
     """Carries a client-facing message for a 400 validation_error response."""
+
+
+def is_valid_uuid(value: str) -> bool:
+    """True only for the canonical 8-4-4-4-12 form Postgres accepts.
+
+    uuid.UUID() alone is too lenient — it also parses urn:uuid:/braced/bare-hex
+    forms that Postgres's uuid cast rejects (which would surface as a 500 instead
+    of a clean 404 for an id that plainly can't exist).
+    """
+    try:
+        return str(uuid.UUID(value)) == value.lower()
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def validate_focus_subjects(value):

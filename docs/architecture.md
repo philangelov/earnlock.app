@@ -77,10 +77,10 @@ earnlock/
 ├── backend/                    # Flask API
 │   ├── app/
 │   │   ├── __init__.py         # app factory (CORS, JWKS client, blueprints)
-│   │   ├── routes/             # blueprints: auth, health, profile, quiz
+│   │   ├── routes/             # blueprints: auth, health, knowledge, profile, quiz, screentime, wakeup
 │   │   ├── middleware/         # JWT auth middleware (require_auth)
 │   │   ├── services/           # Supabase PostgREST client (service-role)
-│   │   ├── repos/              # data access (quiz_repo)
+│   │   ├── repos/              # data access (quiz_repo, knowledge_repo, wakeup_repo)
 │   │   ├── ai/                 # Explainer interface + DummyExplainer stub
 │   │   ├── config.py           # env config + quiz reward rule constants
 │   │   ├── validation.py       # shared grade_or_age validation
@@ -96,8 +96,8 @@ earnlock/
 
 > **Planned, not yet implemented:** a local Expo native module in Swift at
 > `frontend/modules/earnlock-screentime/` (§ Native below), a `frontend/src/lib/` API
-> client layer, and backend blueprints for `/knowledge`, `/screentime/balance`, `/sos`
-> and `/wakeup` (see §7).
+> client layer, and the backend `/sos` blueprint (see §7.3). `/knowledge`,
+> `/screentime/balance` and `/wakeup` are implemented.
 
 ## 5. Technology stack
 
@@ -241,16 +241,35 @@ The `/sos` blueprint does not exist yet, but the debt machinery around it is liv
 `profiles.sos_debt_flag` and `last_sos_date` are in the schema, `/quiz/generate` already
 sizes the quiz by the flag, and `/quiz/submit` already clears it.
 
-### 7.4 Wake-Up Lock — planned, not yet implemented
-Native `DeviceActivitySchedule` shields apps at 07:30. `GET /wakeup/status` says whether the
-lock is active today; the user solves 3 questions; `POST /wakeup/complete` marks the day done
-and the shield is lifted. Status resets daily. (Only the `profiles.wakeup_completed_date`
-column exists so far; neither the endpoints nor the native scheduling are built.)
+### 7.4 Wake-Up Lock
+Native `DeviceActivitySchedule` shields apps at 07:30 — **that native scheduling is still
+planned, not yet built.** The backend state engine (issue #8) is implemented:
+`GET /wakeup/status` says whether the lock is active today; the user solves however many
+questions the normal `/quiz/generate` + `/quiz/submit` flow asks for (`required_questions`
+in the status response is informational, sized by `WAKEUP_QUESTIONS` — there is no
+dedicated "generate a 3-question wake-up quiz" request shape yet, so this isn't enforced
+against the submitted quiz's actual length); `POST /wakeup/complete` takes that quiz's id
+and marks the day done.
+
+Anti-replay: `/wakeup/complete` only accepts a `quiz_id` for a quiz the caller owns that
+was submitted **today** (server UTC clock) — a quiz submitted on an earlier day can't be
+replayed to clear today's lock, and there is no client-supplied date/timestamp anywhere
+in the flow for a client to manipulate. "Already completed today" is guarded by a single
+atomic conditional `UPDATE` (`app/repos/wakeup_repo.py`), not a check-then-write, so a
+duplicate/concurrent call gets a clean `409` instead of a second silent success.
+
+Daily reset is implicit and needs no reset job: `active`/`completed_today` are always
+computed against the server's current UTC date, so the lock reappears automatically at
+UTC midnight. There is no per-user timezone stored anywhere in the schema, so "midnight"
+here is UTC midnight, not the child's local midnight — `WAKEUP_TIME` (07:30) is a
+client-local concept (the device's own clock decides when to actually raise the shield
+each morning); reconciling that with a true per-user local-timezone daily reset would
+need a new `profiles` column and is out of scope for the backend state engine alone.
 
 ## 8. Business rules (single source of truth)
 
 These live as **backend config constants** so they can be tuned without a client release.
-The first four are implemented in `backend/app/config.py` and overridable via env vars:
+Implemented in `backend/app/config.py` and overridable via env vars:
 
 | Rule | Default | Config key |
 |---|---|---|
@@ -259,6 +278,11 @@ The first four are implemented in `backend/app/config.py` and overridable via en
 | Questions per normal quiz | 5 | `QUIZ_LEN_NORMAL` |
 | Questions per SOS-debt quiz | 7 | `QUIZ_LEN_DEBT` |
 | Seconds per correct answer (derived, not a key) | 180 s | `REWARD_SECONDS / QUIZ_CORRECT_TARGET` |
+| Knowledge Import stored-text cap | 12,000 chars | `KNOWLEDGE_MAX_CHARS` |
+| Knowledge Import link-fetch timeout | 10 s | `KNOWLEDGE_FETCH_TIMEOUT_SECONDS` |
+| Knowledge Import link-fetch size cap | 2,000,000 bytes | `KNOWLEDGE_FETCH_MAX_BYTES` |
+| Global request body cap | 1,000,000 bytes | `MAX_CONTENT_LENGTH` |
+| Wake-Up Lock questions (informational; the client displays it, `/quiz/generate` isn't yet asked for exactly this many) | 3 | `WAKEUP_QUESTIONS` |
 
 **Planned, not yet implemented** (will follow the same pattern when their features land;
 none of these keys exist in `config.py` today):
@@ -266,13 +290,8 @@ none of these keys exist in `config.py` today):
 | Rule | Default | Config key |
 |---|---|---|
 | SOS emergency unlock | 120 s, once/day | `SOS_SECONDS`, `SOS_DAILY_LIMIT` |
-| Wake-Up Lock questions | 3 | `WAKEUP_QUESTIONS` |
-| Wake-Up Lock time | 07:30 local | `WAKEUP_TIME` |
+| Wake-Up Lock time | 07:30 local | `WAKEUP_TIME` (client — the backend has no per-user timezone to evaluate this against; see §7.4) |
 | Learning Mode forced-read | 10 s locked Continue | `LEARNING_LOCK_SECONDS` (client) |
-| Knowledge Import stored-text cap | 12,000 chars | `KNOWLEDGE_MAX_CHARS` |
-| Knowledge Import link-fetch timeout | 10 s | `KNOWLEDGE_FETCH_TIMEOUT_SECONDS` |
-| Knowledge Import link-fetch size cap | 2,000,000 bytes | `KNOWLEDGE_FETCH_MAX_BYTES` |
-| Global request body cap | 1,000,000 bytes | `MAX_CONTENT_LENGTH` |
 
 ### Earned-seconds formula
 

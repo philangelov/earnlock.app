@@ -6,7 +6,6 @@ hybrid ledger (balance + quiz_history) with an idempotency guard, clears SOS deb
 returns per-question remediation for wrong answers (used by Learning Mode).
 """
 
-import uuid
 from datetime import UTC, datetime
 
 from flask import Blueprint, current_app, g, jsonify, request
@@ -17,20 +16,9 @@ from app.quiz_content import public_view
 from app.repos import knowledge_repo, quiz_repo
 from app.repos.quiz_repo import QuizAlreadySubmitted
 from app.services import supabase
+from app.validation import is_valid_uuid
 
 quiz_bp = Blueprint("quiz", __name__, url_prefix="/quiz")
-
-
-def _is_uuid(value: str) -> bool:
-    """True only for the canonical 8-4-4-4-12 form Postgres accepts.
-
-    uuid.UUID() alone is too lenient — it also parses urn:uuid:/braced/bare-hex
-    forms that Postgres's uuid cast rejects (which would surface as a 500).
-    """
-    try:
-        return str(uuid.UUID(value)) == value.lower()
-    except ValueError:
-        return False
 
 
 def _now_iso() -> str:
@@ -156,7 +144,7 @@ def submit_quiz():
 
     # A malformed id can't exist; answering 404 here also spares PostgREST a
     # guaranteed uuid-cast error (which would surface as a 500).
-    if not _is_uuid(quiz_id):
+    if not is_valid_uuid(quiz_id):
         return _error("not_found", "quiz not found", 404)
 
     quiz = quiz_repo.get_quiz(quiz_id, g.user_id)

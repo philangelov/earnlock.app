@@ -9,6 +9,7 @@ from app.routes.knowledge import knowledge_bp
 from app.routes.profile import profile_bp
 from app.routes.quiz import quiz_bp
 from app.routes.screentime import screentime_bp
+from app.routes.wakeup import wakeup_bp
 from app.services.supabase import SupabaseError
 
 
@@ -28,6 +29,7 @@ def create_app():
     app.register_blueprint(profile_bp)
     app.register_blueprint(quiz_bp)
     app.register_blueprint(screentime_bp)
+    app.register_blueprint(wakeup_bp)
 
     @app.errorhandler(SupabaseError)
     def handle_supabase_error(exc):

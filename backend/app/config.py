@@ -36,6 +36,9 @@ class Config:
     # Global request body cap (Flask reads this key name automatically) — protects every
     # endpoint, not just Knowledge Import, from oversized payloads.
     MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", "1000000"))
+    # Wake-Up Lock (issue #8) — informational for the client (GET /wakeup/status);
+    # the questions themselves are generated via the normal POST /quiz/generate.
+    WAKEUP_QUESTIONS = int(os.getenv("WAKEUP_QUESTIONS", "3"))
 
 
 class DevelopmentConfig(Config):
