@@ -18,10 +18,12 @@ export default function EarnedScreen() {
   const t = useTokens();
   const router = useRouter();
   const claim = useEarnLock((s) => s.claim);
+  const lastEarnedSeconds = useEarnLock((s) => s.lastEarnedSeconds);
   const count = useScreenTime((s) => s.selection.total);
 
-  // Grant the reward the moment the celebration appears — not on the CTA — so the "unlocked"
-  // copy is true immediately and the reward can't be lost by swiping the screen away.
+  // The reward was already granted by submitQuizNow() at the end of the quiz — server-
+  // side, atomically, before this screen ever mounts. claim() here just clears transient
+  // per-attempt UI state (recap picks etc.), so the reward can't be lost by swiping away.
   const claimed = useRef(false);
   useEffect(() => {
     if (claimed.current) return;
@@ -30,19 +32,21 @@ export default function EarnedScreen() {
     haptic.success();
   }, [claim]);
 
+  const earnedMinutes = Math.round(lastEarnedSeconds / 60);
   const [earned, setEarned] = useState(0);
   useEffect(() => {
+    if (earnedMinutes <= 0) return;
     let v = 0;
     const id = setInterval(() => {
       v++;
-      if (v >= 15) {
+      if (v >= earnedMinutes) {
         clearInterval(id);
-        v = 15;
+        v = earnedMinutes;
       }
       setEarned(v);
     }, 45);
     return () => clearInterval(id);
-  }, []);
+  }, [earnedMinutes]);
 
   return (
     <Screen scroll bottomInset contentStyle={styles.content}>
@@ -53,7 +57,13 @@ export default function EarnedScreen() {
           size={208}
           viewBox={140}
           rings={[
-            { r: 58, strokeWidth: 12, trackColor: t.fill, color: t.accent, progress: earned / 15 },
+            {
+              r: 58,
+              strokeWidth: 12,
+              trackColor: t.fill,
+              color: t.accent,
+              progress: earnedMinutes > 0 ? earned / earnedMinutes : 0,
+            },
           ]}
         >
           <View style={styles.center}>
@@ -67,7 +77,9 @@ export default function EarnedScreen() {
 
       <Text style={[Type.title1, { color: t.text, marginTop: Space.xxl }]}>Nice work!</Text>
       <Text style={[Type.body, styles.desc, { color: t.text2 }]}>
-        Lesson complete — you earned 15 minutes and your apps are unlocked.
+        {earnedMinutes > 0
+          ? `Quiz complete — you earned ${earnedMinutes} minute${earnedMinutes === 1 ? '' : 's'} and your apps are unlocked.`
+          : 'Quiz complete — answer more correctly next time to earn screen time.'}
       </Text>
 
       <View style={[styles.chip, { backgroundColor: t.accentSoft }]}>
