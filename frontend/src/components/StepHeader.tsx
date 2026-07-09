@@ -1,13 +1,23 @@
 /**
- * StepHeader — the minimal top bar for the onboarding flow: a back chevron plus a row of step
- * dots (the current step filled with lime). When a screen is reused as an EDIT screen (opened
- * from Profile rather than the linear first-run flow), pass `title` instead — the dots are
- * replaced by a centered title, so we don't imply a 3-step wizard that isn't happening.
+ * StepHeader — the top bar for the onboarding flow: a back chevron, a progress bar, and an
+ * optional trailing "Skip". The bar animates from the previous step's fraction to this step's on
+ * mount, so pushing a screen visibly advances it rather than snapping.
+ *
+ * When a screen is reused as an EDIT screen (opened from Profile rather than the linear first-run
+ * flow), pass `title` instead — the bar is replaced by a centered title, so we don't imply a
+ * wizard that isn't happening.
  */
+import { useEffect } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { haptic } from '@/lib/haptics';
-import { Radius } from '@/theme/tokens';
+import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
 import { useTokens } from '@/theme/theme';
 
@@ -18,14 +28,32 @@ export function StepHeader({
   total,
   title,
   onBack,
+  onSkip,
+  skipLabel = 'Skip',
 }: {
+  /** Zero-based index of the current step. */
   step: number;
   total: number;
-  /** Edit-mode title — when set, replaces the progress dots. */
+  /** Edit-mode title — when set, replaces the progress bar. */
   title?: string;
   onBack: () => void;
+  /** Renders a trailing text button when provided. */
+  onSkip?: () => void;
+  skipLabel?: string;
 }) {
   const t = useTokens();
+
+  // Grow the bar on mount: from where the previous screen left it, to this step's share.
+  const progress = useSharedValue(step / total);
+  useEffect(() => {
+    progress.value = withTiming((step + 1) / total, {
+      duration: 480,
+      easing: Easing.out(Easing.cubic),
+    });
+  }, [progress, step, total]);
+
+  const fill = useAnimatedStyle(() => ({ width: `${progress.value * 100}%` }));
+
   return (
     <View style={styles.root}>
       <Pressable
@@ -51,40 +79,49 @@ export function StepHeader({
         </Text>
       ) : (
         <View
-          style={styles.dots}
+          style={[styles.track, { backgroundColor: t.fill }]}
           accessibilityRole="progressbar"
           accessibilityLabel={`Step ${step + 1} of ${total}`}
+          accessibilityValue={{ min: 0, max: total, now: step + 1 }}
         >
-          {Array.from({ length: total }).map((_, i) => (
-            <View
-              key={i}
-              style={[
-                styles.dot,
-                i === step
-                  ? { width: 22, backgroundColor: t.accent }
-                  : { width: 7, backgroundColor: t.fillStrong },
-              ]}
-            />
-          ))}
+          <Animated.View style={[styles.fill, { backgroundColor: t.accent }, fill]} />
         </View>
       )}
 
-      <View style={styles.spacer} />
+      {onSkip ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={skipLabel}
+          hitSlop={12}
+          onPress={() => {
+            haptic.tap();
+            onSkip();
+          }}
+          style={({ pressed }) => [styles.skip, pressed && { opacity: 0.5 }]}
+        >
+          <Text style={[Type.subheadStrong, { color: t.text3 }]}>{skipLabel}</Text>
+        </Pressable>
+      ) : (
+        <View style={styles.spacer} />
+      )}
     </View>
   );
 }
 
+const CONTROL = 34;
+
 const styles = StyleSheet.create({
-  root: { flexDirection: 'row', alignItems: 'center' },
+  root: { flexDirection: 'row', alignItems: 'center', gap: Space.md },
   back: {
-    width: 34,
-    height: 34,
+    width: CONTROL,
+    height: CONTROL,
     borderRadius: Radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  dots: { flex: 1, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6 },
-  dot: { height: 7, borderRadius: Radius.pill },
+  track: { flex: 1, height: 5, borderRadius: Radius.pill, overflow: 'hidden' },
+  fill: { height: '100%', borderRadius: Radius.pill },
   title: { flex: 1, textAlign: 'center' },
-  spacer: { width: 34 },
+  skip: { minWidth: CONTROL, alignItems: 'flex-end' },
+  spacer: { width: CONTROL },
 });

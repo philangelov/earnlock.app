@@ -1,3 +1,8 @@
+/**
+ * Grade & subjects — the Profile edit screen. First-run collects these through the onboarding
+ * flow (age implies the grade, `onboarding/subjects` picks the subjects), so this screen exists
+ * purely to change them afterwards: always titled, always "Save".
+ */
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -6,6 +11,7 @@ import { Card } from '@/components/Card';
 import { SectionHeader } from '@/components/List';
 import { Screen } from '@/components/Screen';
 import { StepHeader } from '@/components/StepHeader';
+import { SubjectChips } from '@/components/SubjectChips';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
 import { SUBJECT_DEFS } from '@/store/content';
@@ -23,20 +29,21 @@ export default function SetupScreen() {
   const gradeDown = useEarnLock((s) => s.gradeDown);
   const subj = useEarnLock((s) => s.subj);
   const toggleSubj = useEarnLock((s) => s.toggleSubj);
-  const onboarded = useEarnLock((s) => s.onboarded);
 
   const chosen = SUBJECT_DEFS.filter((s) => subj[s.key]).length;
-  const canContinue = chosen > 0;
 
   return (
-    <Screen scroll bottomInset contentStyle={styles.content}>
-      <StepHeader
-        step={0}
-        total={3}
-        title={onboarded ? 'Grade & subjects' : undefined}
-        onBack={() => router.back()}
-      />
-
+    <Screen
+      scroll
+      contentStyle={styles.content}
+      header={
+        <View style={styles.header}>
+          <StepHeader step={0} total={1} title="Grade & subjects" onBack={() => router.back()} />
+        </View>
+      }
+      footer={<Button label="Save" disabled={chosen === 0} onPress={() => router.back()} />}
+      footerStyle={styles.footer}
+    >
       <Text style={[Type.title1, { color: t.text, marginTop: Space.lg }]}>A bit about you</Text>
       <Text style={[Type.body, { color: t.text2, marginTop: 6 }]}>
         This tunes the questions to the right level and topics.
@@ -60,40 +67,7 @@ export default function SetupScreen() {
 
       {/* Subjects */}
       <SectionHeader title={`Subjects · ${chosen} chosen`} style={styles.sectionHeader} />
-      <View style={styles.chips}>
-        {SUBJECT_DEFS.map((s) => {
-          const on = subj[s.key];
-          return (
-            <Pressable
-              key={s.key}
-              accessibilityRole="button"
-              accessibilityLabel={s.key}
-              accessibilityState={{ selected: on }}
-              hitSlop={{ top: 6, bottom: 6 }}
-              onPress={() => {
-                haptic.select();
-                toggleSubj(s.key);
-              }}
-              style={[
-                styles.chip,
-                on
-                  ? { backgroundColor: t.accent, borderColor: t.accent }
-                  : { backgroundColor: t.surface, borderColor: t.separator },
-              ]}
-            >
-              <Sym name={s.icon} size={15} color={on ? t.onAccent : t.text2} />
-              <Text style={[Type.subheadStrong, { color: on ? t.onAccent : t.text }]}>{s.key}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      <View style={styles.spacer} />
-      <Button
-        label={onboarded ? 'Save' : 'Continue'}
-        disabled={!canContinue}
-        onPress={() => (onboarded ? router.back() : router.push('/material'))}
-      />
+      <SubjectChips selected={subj} onToggle={toggleSubj} />
     </Screen>
   );
 }
@@ -134,7 +108,9 @@ function StepBtn({
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: Space.xl, paddingTop: Space.sm, paddingBottom: Space.sm },
+  header: { paddingHorizontal: Space.xl, paddingTop: Space.sm },
+  content: { paddingHorizontal: Space.xl, paddingBottom: Space.xxl },
+  footer: { paddingHorizontal: Space.xl, paddingTop: Space.md },
   sectionHeader: { marginTop: Space.xxl, marginBottom: Space.sm },
 
   gradeCard: {
@@ -152,17 +128,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Space.sm },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    borderRadius: Radius.pill,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-
-  spacer: { height: Space.xxxl },
 });

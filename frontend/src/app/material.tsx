@@ -8,6 +8,7 @@ import { Screen } from '@/components/Screen';
 import { StepHeader } from '@/components/StepHeader';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
+import { STEP_TOTAL, stepIndex } from '@/store/onboarding';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -43,16 +44,31 @@ export default function MaterialScreen() {
   };
 
   return (
-    <Screen scroll bottomInset contentStyle={styles.content}>
-      <StepHeader
-        step={1}
-        total={3}
-        title={onboarded ? 'Study material' : undefined}
-        onBack={() => router.back()}
-      />
-
-      <Text style={[Type.title1, { color: t.text, marginTop: Space.lg }]}>Add your material</Text>
-      <Text style={[Type.body, { color: t.text2, marginTop: 6 }]}>
+    <Screen
+      scroll
+      contentStyle={styles.content}
+      avoidKeyboard
+      header={
+        <View style={styles.header}>
+          <StepHeader
+            step={stepIndex('material')}
+            total={STEP_TOTAL}
+            title={onboarded ? 'Study material' : undefined}
+            onBack={() => router.back()}
+          />
+        </View>
+      }
+      footer={
+        <Button
+          label={onboarded ? 'Save' : 'Generate questions'}
+          disabled={!canContinue}
+          onPress={onContinue}
+        />
+      }
+      footerStyle={styles.footer}
+    >
+      <Text style={[Type.title1, styles.heading, { color: t.text }]}>Add your material</Text>
+      <Text style={[Type.subhead, styles.sub, { color: t.text2 }]}>
         Paste notes or upload a worksheet — questions are generated from your own content.
       </Text>
 
@@ -118,19 +134,17 @@ export default function MaterialScreen() {
           <Sym name="chevron.right" size={14} color={t.text3} weight="semibold" />
         </Card>
       </Pressable>
-
-      <View style={styles.spacer} />
-      <Button
-        label={onboarded ? 'Save' : 'Generate questions'}
-        disabled={!canContinue}
-        onPress={onContinue}
-      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: Space.xl, paddingTop: Space.sm, paddingBottom: Space.sm },
+  header: { paddingHorizontal: Space.xl, paddingTop: Space.sm },
+  content: { paddingHorizontal: Space.xl, paddingBottom: Space.xxl },
+  footer: { paddingHorizontal: Space.xl, paddingTop: Space.md },
+
+  heading: { textAlign: 'center', marginTop: Space.xl },
+  sub: { textAlign: 'center', marginTop: 8 },
 
   inputCard: { marginTop: Space.xl, padding: 0, overflow: 'hidden' },
   input: {
@@ -166,6 +180,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  spacer: { height: Space.xxxl },
 });

@@ -11,6 +11,7 @@ import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
 import { useScreenTime } from '@/lib/screenTime/store';
 import { MC_COUNT } from '@/store/content';
+import { requiresLockedApps, STEP_TOTAL, stepIndex } from '@/store/onboarding';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -22,6 +23,7 @@ export default function AppsScreen() {
 
   const completeOnboarding = useEarnLock((s) => s.completeOnboarding);
   const onboarded = useEarnLock((s) => s.onboarded);
+  const commitment = useEarnLock((s) => s.commitment);
 
   const available = useScreenTime((s) => s.available);
   const status = useScreenTime((s) => s.status);
@@ -33,6 +35,12 @@ export default function AppsScreen() {
   const approved = status === 'approved';
   const denied = status === 'denied';
   const count = selection.total;
+
+  // Firm mode is the one commitment that can't work without something to shield, so it's the one
+  // that gates the CTA. The other two can finish now and add apps from Profile whenever they like.
+  // Never gate on a build where Screen Time isn't available at all — that would be a dead end.
+  const mustPick = !onboarded && available && requiresLockedApps(commitment);
+  const canFinish = !mustPick || count > 0;
 
   const onConnect = () => {
     haptic.press();
@@ -56,20 +64,37 @@ export default function AppsScreen() {
   };
 
   return (
-    <Screen scroll bottomInset contentStyle={styles.content}>
-      <StepHeader
-        step={2}
-        total={3}
-        title={onboarded ? 'Locked apps' : undefined}
-        onBack={() => router.back()}
-      />
-
-      <Text style={[Type.title1, { color: t.text, marginTop: Space.lg }]}>
-        Lock the distractions
+    <Screen
+      scroll
+      contentStyle={styles.content}
+      header={
+        <View style={styles.header}>
+          <StepHeader
+            step={stepIndex('apps')}
+            total={STEP_TOTAL}
+            title={onboarded ? 'Locked apps' : undefined}
+            onBack={() => router.back()}
+          />
+        </View>
+      }
+      footer={
+        <Button
+          label={onboarded ? 'Done' : 'Finish setup'}
+          disabled={!canFinish}
+          onPress={finish}
+        />
+      }
+      footerStyle={styles.footer}
+    >
+      <Text style={[Type.title1, styles.heading, { color: t.text }]}>
+        {commitment === 'insight' && !onboarded
+          ? 'See where the time goes'
+          : 'Lock the distractions'}
       </Text>
-      <Text style={[Type.body, { color: t.text2, marginTop: 6 }]}>
-        Apple Screen Time shields your chosen apps until time is earned. Your selection stays
-        private — even to EarnLock.
+      <Text style={[Type.subhead, styles.sub, { color: t.text2 }]}>
+        {commitment === 'insight' && !onboarded
+          ? 'Screen Time gives EarnLock the numbers. Picking apps to shield is optional — add them whenever you’re ready.'
+          : 'Apple Screen Time shields your chosen apps until time is earned. Your selection stays private — even to EarnLock.'}
       </Text>
 
       {/* Step 1 — authorization */}
@@ -129,7 +154,11 @@ export default function AppsScreen() {
                 : 'Choose apps to lock'}
             </Text>
             <Text style={[Type.footnote, { color: t.text2, marginTop: 1 }]}>
-              {approved ? 'Pick the apps that eat your day.' : 'Connect Screen Time first.'}
+              {!approved
+                ? 'Connect Screen Time first.'
+                : mustPick
+                  ? 'Firm locks need at least one app to shield.'
+                  : 'Optional — you can add these later from Profile.'}
             </Text>
           </View>
         </View>
@@ -153,16 +182,18 @@ export default function AppsScreen() {
         </Text>
       </View>
 
-      <View style={styles.spacer} />
-      <Button label={onboarded ? 'Done' : 'Finish setup'} onPress={finish} />
-
       <AppPicker visible={pickerOpen} onClose={() => setPickerOpen(false)} onChange={refresh} />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: Space.xl, paddingTop: Space.sm, paddingBottom: Space.sm },
+  header: { paddingHorizontal: Space.xl, paddingTop: Space.sm },
+  content: { paddingHorizontal: Space.xl, paddingBottom: Space.xxl },
+  footer: { paddingHorizontal: Space.xl, paddingTop: Space.md },
+
+  heading: { textAlign: 'center', marginTop: Space.xl },
+  sub: { textAlign: 'center', marginTop: 8 },
 
   stepLabel: { marginTop: Space.xl, marginBottom: Space.sm, marginHorizontal: 4 },
   card: { padding: Space.lg },
@@ -194,6 +225,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  spacer: { height: Space.xxl },
 });

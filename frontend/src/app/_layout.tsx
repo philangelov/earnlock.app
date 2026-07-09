@@ -46,6 +46,15 @@ function RootNavigator() {
     <NavigationThemeProvider value={navTheme}>
       <StatusBar style={dark ? 'light' : 'dark'} />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.bg } }}>
+        {/*
+         * The onboarding group is its own nested stack, and it owns going back — the inner stack's
+         * per-screen `gestureEnabled` decides whether a step can be swiped away. Leaving the pop
+         * gesture on here would give the OUTER navigation controller an edge recogniser too, and
+         * it would fire whenever the inner one declines (the two slider steps) — swiping the whole
+         * flow back to Welcome instead of doing nothing. Half-finished onboarding should never be
+         * one stray swipe from the start.
+         */}
+        <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
         <Stack.Screen
           name="sos"
           options={{

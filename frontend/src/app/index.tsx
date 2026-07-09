@@ -53,12 +53,13 @@ export default function WelcomeScreen() {
   if (onboarded) return <Redirect href="/today" />;
 
   return (
-    <Screen scroll bottomInset contentStyle={styles.content}>
-      <View style={[styles.badge, { backgroundColor: t.accent }]}>
-        <Sym name="bolt.fill" size={30} color={t.onAccent} weight="bold" />
-      </View>
-
-      <Text style={[Type.largeTitle, { color: t.text, marginTop: Space.xl }]}>
+    <Screen
+      scroll
+      contentStyle={styles.content}
+      footer={<Button label="Get started" onPress={() => router.push('/onboarding/usage')} />}
+      footerStyle={styles.footer}
+    >
+      <Text style={[Type.largeTitle, { color: t.text }]}>
         Screen time,{'\n'}earned by learning.
       </Text>
       <Text style={[Type.body, { color: t.text2, marginTop: Space.md }]}>
@@ -74,7 +75,7 @@ export default function WelcomeScreen() {
           delay={80}
         />
         <Benefit
-          icon="bolt.fill"
+          icon="graduationcap.fill"
           title="Learn to unlock"
           desc="Answer questions from your own notes to earn 15 minutes at a time."
           accent
@@ -87,23 +88,14 @@ export default function WelcomeScreen() {
           delay={240}
         />
       </View>
-
-      <View style={styles.spacer} />
-      <Button label="Get started" onPress={() => router.push('/setup')} />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { paddingHorizontal: Space.xxl, paddingTop: Space.xxl, paddingBottom: Space.sm },
-  badge: {
-    width: 60,
-    height: 60,
-    borderRadius: Radius.card,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  // The title is the mark now — no badge above it, so it needs the breathing room the badge had.
+  content: { paddingHorizontal: Space.xxl, paddingTop: Space.xxxl, paddingBottom: Space.xxl },
+  footer: { paddingHorizontal: Space.xxl, paddingTop: Space.md },
   benefits: { gap: Space.xl, marginTop: Space.xxxl },
   benefit: { flexDirection: 'row', gap: Space.md, alignItems: 'flex-start' },
   benefitIcon: {
@@ -114,5 +106,4 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  spacer: { flex: 1, minHeight: Space.xxl },
 });

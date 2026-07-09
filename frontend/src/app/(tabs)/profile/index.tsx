@@ -24,6 +24,8 @@ export default function ProfileScreen() {
   const streak = useEarnLock((s) => s.streak);
   const coins = useEarnLock((s) => s.coins);
   const resetAll = useEarnLock((s) => s.resetAll);
+  const name = useEarnLock((s) => s.name).trim();
+  const account = useEarnLock((s) => s.account);
 
   const available = useScreenTime((s) => s.available);
   const status = useScreenTime((s) => s.status);
@@ -37,6 +39,16 @@ export default function ProfileScreen() {
   }, [refresh]);
 
   const subjectCount = SUBJECT_DEFS.filter((s) => subj[s.key]).length;
+
+  // Fall back to the demo learner until onboarding has supplied a real name.
+  const displayName = name || LEARNER.name;
+  const initials = name
+    ? name
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((part) => part[0]?.toUpperCase() ?? '')
+        .join('')
+    : LEARNER.initials;
 
   const stConnected = status === 'approved';
   const stValue = !available
@@ -92,11 +104,16 @@ export default function ProfileScreen() {
       {/* Identity */}
       <Card style={styles.identity}>
         <View style={[styles.avatar, { backgroundColor: t.accent }]}>
-          <Text style={[Type.title2, { color: t.onAccent }]}>{LEARNER.initials}</Text>
+          <Text style={[Type.title2, { color: t.onAccent }]}>{initials}</Text>
         </View>
-        <Text style={[Type.title3, { color: t.text, marginTop: Space.md }]}>{LEARNER.name}</Text>
+        <Text style={[Type.title3, { color: t.text, marginTop: Space.md }]}>{displayName}</Text>
         <Text style={[Type.footnote, { color: t.text2 }]}>
-          Grade {grade} · {LEARNER.joined}
+          Grade {grade} ·{' '}
+          {account === 'apple'
+            ? 'Signed in with Apple'
+            : account === 'google'
+              ? 'Signed in with Google'
+              : 'Progress saved on this device'}
         </Text>
         <View style={styles.miniStats}>
           <MiniStat icon="flame.fill" value={String(streak)} label="Streak" />

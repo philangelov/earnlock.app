@@ -1,14 +1,25 @@
 /**
- * Screen — the standard page container: fills the viewport with the theme background and
- * applies the top safe-area inset (the OS draws the real status bar; we don't fake the
- * prototype's "9:41" bar). Set `scroll` for scrollable pages — the content container uses
- * `flexGrow:1` so a `<View style={{ flex:1 }} />` spacer can pin the CTA to the bottom, exactly
- * like the design's `flex:1` spacer + `overflow-y:auto` pattern.
+ * Screen — the standard page container. It fills the viewport with the theme background, applies
+ * the top safe-area inset (the OS draws the real status bar; we don't fake one), and lays out
+ * three bands in a flex column:
+ *
+ *     [ header ]   fixed
+ *     [ body   ]   flex:1, scrolls when `scroll` is set
+ *     [ footer ]   fixed, owns the bottom safe-area inset
+ *
+ * A `footer` is how a primary action stays put: it lives outside the scroll area, so it is on
+ * screen from the first frame and never has to be scrolled to. With `avoidKeyboard`, the footer's
+ * bottom padding tracks the keyboard — which grows the footer, which shrinks the flex:1 body, so
+ * the content lifts with the keyboard rather than hiding behind it.
+ *
+ * Without a footer, `bottomInset` pads the content instead (the original behaviour).
  */
 import type { ReactNode } from 'react';
-import { ScrollView, View, type ViewStyle } from 'react-native';
+import { ScrollView, StyleSheet, View, type ViewStyle } from 'react-native';
+import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { Space } from '@/theme/tokens';
 import { useTokens } from '@/theme/theme';
 
 export type ScreenProps = {
@@ -20,8 +31,16 @@ export type ScreenProps = {
   background?: string;
   /** Apply the top safe-area inset (default true). */
   topInset?: boolean;
-  /** Apply the bottom safe-area inset (default false; tab screens let the tab bar handle it). */
+  /** Pad the content by the bottom inset. Ignored when a `footer` is present. */
   bottomInset?: boolean;
+  /** Fixed band above the body — a step header, a back button. */
+  header?: ReactNode;
+  /** Fixed band below the body — the primary action. Never scrolls. */
+  footer?: ReactNode;
+  /** Padding for the footer band (horizontal padding, gaps). */
+  footerStyle?: ViewStyle | ViewStyle[];
+  /** Lift the footer above the keyboard. Only meaningful alongside `footer`. */
+  avoidKeyboard?: boolean;
 };
 
 export function Screen({
@@ -31,28 +50,52 @@ export function Screen({
   background,
   topInset = true,
   bottomInset = false,
+  header,
+  footer,
+  footerStyle,
+  avoidKeyboard,
 }: ScreenProps) {
   const t = useTokens();
   const insets = useSafeAreaInsets();
+  const keyboard = useAnimatedKeyboard();
+
+  const hasFooter = footer != null;
   const paddingTop = topInset ? insets.top : 0;
-  const paddingBottom = bottomInset ? insets.bottom : 0;
+  const paddingBottom = bottomInset && !hasFooter ? insets.bottom : 0;
+
+  const footerBand = useAnimatedStyle(() => ({
+    paddingBottom: avoidKeyboard
+      ? Math.max(insets.bottom, keyboard.height.value + Space.md)
+      : Math.max(insets.bottom, Space.md),
+  }));
+
+  const body = scroll ? (
+    <ScrollView
+      style={styles.flex}
+      contentContainerStyle={[styles.grow, { paddingBottom }, contentStyle]}
+      showsVerticalScrollIndicator={false}
+      // With a footer the band already tracks the keyboard; letting the ScrollView inset as well
+      // would move the content twice.
+      automaticallyAdjustKeyboardInsets={!hasFooter}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="interactive"
+    >
+      {children}
+    </ScrollView>
+  ) : (
+    <View style={[styles.flex, { paddingBottom }, contentStyle]}>{children}</View>
+  );
 
   return (
-    <View style={{ flex: 1, backgroundColor: background ?? t.bg, paddingTop }}>
-      {scroll ? (
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={[{ flexGrow: 1, paddingBottom }, contentStyle]}
-          showsVerticalScrollIndicator={false}
-          automaticallyAdjustKeyboardInsets
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-        >
-          {children}
-        </ScrollView>
-      ) : (
-        <View style={[{ flex: 1, paddingBottom }, contentStyle]}>{children}</View>
-      )}
+    <View style={[styles.flex, { backgroundColor: background ?? t.bg, paddingTop }]}>
+      {header}
+      {body}
+      {hasFooter && <Animated.View style={[footerStyle, footerBand]}>{footer}</Animated.View>}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  grow: { flexGrow: 1 },
+});
