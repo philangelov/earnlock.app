@@ -6,7 +6,7 @@ import { Button } from '@/components/Button';
 import { Screen } from '@/components/Screen';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
-import { MC_COUNT, RECAP } from '@/store/content';
+import { QUIZ_QUESTIONS, RECAP } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -24,7 +24,7 @@ export default function RecapScreen() {
 
   const correct = recapPick === RECAP.answer;
   // Derived from flow state: all MC done, plus this final step once it's answered correctly.
-  const progress = (MC_COUNT + (recapChecked && correct ? 1 : 0)) / (MC_COUNT + 1);
+  const progress = (QUIZ_QUESTIONS + (recapChecked && correct ? 1 : 0)) / (QUIZ_QUESTIONS + 1);
 
   const blankStyle = (): ViewStyle => {
     if (recapChecked) {

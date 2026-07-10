@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 
 import { Button } from '@/components/Button';
+import { Logo } from '@/components/Logo';
 import { Screen } from '@/components/Screen';
 import { Sym, type SymName } from '@/components/Sym';
 import { useEarnLock } from '@/store/useEarnLock';
@@ -59,6 +60,10 @@ export default function WelcomeScreen() {
       footer={<Button label="Get started" onPress={() => router.push('/onboarding/usage')} />}
       footerStyle={styles.footer}
     >
+      <Animated.View entering={FadeInDown.duration(420)} style={styles.logo}>
+        <Logo size={72} />
+      </Animated.View>
+
       <Text style={[Type.largeTitle, { color: t.text }]}>
         Screen time,{'\n'}earned by learning.
       </Text>
@@ -93,9 +98,11 @@ export default function WelcomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  // The title is the mark now — no badge above it, so it needs the breathing room the badge had.
-  content: { paddingHorizontal: Space.xxl, paddingTop: Space.xxxl, paddingBottom: Space.xxl },
+  content: { paddingHorizontal: Space.xxl, paddingTop: Space.xxl, paddingBottom: Space.xxl },
   footer: { paddingHorizontal: Space.xxl, paddingTop: Space.md },
+  // The mark sits flush left with the title it introduces. The PNG carries ~12% transparent
+  // padding, so it is pulled back by that much to align optically with the text below.
+  logo: { alignSelf: 'flex-start', marginBottom: Space.md, marginLeft: -8 },
   benefits: { gap: Space.xl, marginTop: Space.xxxl },
   benefit: { flexDirection: 'row', gap: Space.md, alignItems: 'flex-start' },
   benefitIcon: {

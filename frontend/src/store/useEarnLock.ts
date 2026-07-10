@@ -15,8 +15,9 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import * as api from '@/lib/api';
+import { getIdentityToken, SignInError } from '@/lib/auth';
 
-import { PASTE_EXAMPLE, type SubjectKey } from './content';
+import { PASTE_EXAMPLE, SUBJECT_DEFS, type SubjectKey } from './content';
 import {
   AGE_DEFAULT,
   gradeForAge,
@@ -30,7 +31,7 @@ import {
 } from './onboarding';
 
 /** Screen time granted per SOS, in milliseconds. Quiz rewards now come from the server. */
-export const SOS_MS = 2 * 60_000;
+const SOS_MS = 2 * 60_000;
 /** Matches the backend's default REWARD_SECONDS (architecture.md §8) — UI scaling only,
  * the real reward amount always comes from POST /quiz/submit's earned_seconds. */
 export const REWARD_MS = 900 * 1000;
@@ -41,8 +42,8 @@ export type EarnLockState = {
   name: string;
   /** Which identity provider saved the progress, if any. No email, no password. */
   account: AccountProvider | null;
-  /** Set once /auth/register or /auth/login succeeds. The JWT itself lives in SecureStore. */
-  authEmail: string | null;
+  /** True while a session exists. Hydrated from SecureStore at launch, not persisted here. */
+  authed: boolean;
   authLoading: boolean;
   authError: string | null;
   age: number;
@@ -84,9 +85,11 @@ export type EarnLockState = {
   // onboarding
   setName: (name: string) => void;
   setAccount: (provider: AccountProvider | null) => void;
-  registerAccount: (email: string, password: string) => Promise<boolean>;
-  loginAccount: (email: string, password: string) => Promise<boolean>;
+  /** Native Apple/Google sign-in. Resolves false on cancel or failure. */
+  signIn: (provider: AccountProvider) => Promise<boolean>;
   logoutAccount: () => Promise<void>;
+  /** Read the stored session at launch so screens know whether the API is usable. */
+  hydrateAuth: () => Promise<void>;
   setAge: (age: number) => void;
   setHoursPerDay: (hours: number) => void;
   estimateHoursPerDay: () => void;
@@ -127,7 +130,7 @@ const initial = {
   onboarded: false,
   name: '',
   account: null as AccountProvider | null,
-  authEmail: null as string | null,
+  authed: false,
   authLoading: false,
   authError: null as string | null,
   age: AGE_DEFAULT,
@@ -180,33 +183,55 @@ export const useEarnLock = create<EarnLockState>()(
       setName: (name) => set({ name }),
       setAccount: (account) => set({ account }),
 
-      registerAccount: async (email, password) => {
+      signIn: async (provider) => {
         set({ authLoading: true, authError: null });
         try {
-          const res = await api.register(email, password, gradeLabel(get().grade));
-          set({ authEmail: res.user.email, authLoading: false });
+          const identity = await getIdentityToken(provider);
+          // Cancelled at the system sheet — not an error, and not worth a red message.
+          if (!identity) {
+            set({ authLoading: false });
+            return false;
+          }
+
+          await api.signInWithIdToken(identity.provider, identity.idToken, identity.nonce);
+          set({ account: provider, authed: true, authLoading: false });
+
+          // The id_token grant carries no signup metadata, so a fresh account's grade is
+          // 'unspecified' until we say otherwise. Onboarding already knows it. Best-effort:
+          // a failure here must not undo a sign-in that actually succeeded.
+          const { grade, subj } = get();
+          const focus = SUBJECT_DEFS.filter((s) => subj[s.key]).map((s) => s.key);
+          try {
+            await api.updateProfile({
+              grade_or_age: gradeLabel(grade),
+              ...(focus.length > 0 ? { focus_subjects: focus } : {}),
+            });
+          } catch {
+            // Profile stays at its defaults; Profile → Grade & subjects can fix it.
+          }
+
           return true;
         } catch (err) {
-          const message = err instanceof api.ApiError ? err.message : 'Could not sign up.';
-          set({ authError: message, authLoading: false });
-          return false;
-        }
-      },
-      loginAccount: async (email, password) => {
-        set({ authLoading: true, authError: null });
-        try {
-          const res = await api.login(email, password);
-          set({ authEmail: res.user.email, authLoading: false });
-          return true;
-        } catch (err) {
-          const message = err instanceof api.ApiError ? err.message : 'Could not log in.';
+          // `fetch` rejects with a bare TypeError when the request never reached a server at
+          // all — wrong host, backend down. Left in the generic branch it reads as "the
+          // provider refused you", which is the one thing it does not mean.
+          const unreachable = err instanceof TypeError;
+          const message =
+            err instanceof api.ApiError || err instanceof SignInError
+              ? err.message
+              : unreachable
+                ? 'Could not reach EarnLock. Check your connection.'
+                : 'Could not sign in.';
           set({ authError: message, authLoading: false });
           return false;
         }
       },
       logoutAccount: async () => {
-        await api.logout();
-        set({ authEmail: null });
+        await api.signOut();
+        set({ account: null, authed: false });
+      },
+      hydrateAuth: async () => {
+        set({ authed: await api.isAuthenticated() });
       },
 
       setPace: (paceMinPerWeek) => set({ paceMinPerWeek }),
@@ -236,10 +261,16 @@ export const useEarnLock = create<EarnLockState>()(
       // accepts pasted text or a URL — so a file selection stays presentational-only.
       // Pasted text is real: it's sent to POST /knowledge/import and stored server-side.
       doImport: async () => {
-        const { importText, uploadName } = get();
+        const { importText, uploadName, authed } = get();
         if (!importText.trim()) {
           set({ imported: uploadName.length > 0 });
           return uploadName.length > 0;
+        }
+        // Skipped sign-in: /knowledge/import needs a session. Keep the text locally so
+        // onboarding can finish, rather than dead-ending on a 401 the user can't act on.
+        if (!authed) {
+          set({ imported: true, importError: null });
+          return true;
         }
         set({ importLoading: true, importError: null });
         try {
@@ -255,6 +286,12 @@ export const useEarnLock = create<EarnLockState>()(
       completeOnboarding: () => set({ onboarded: true }),
 
       beginQuiz: async () => {
+        // Every quiz is graded and rewarded server-side, so there is nothing to show a
+        // signed-out user. Say so instead of surfacing a bare 401.
+        if (!get().authed) {
+          set({ quizError: 'Sign in to start a quiz.', quizLoading: false });
+          return false;
+        }
         set({ quizLoading: true, quizError: null, quizResults: null });
         try {
           const quiz = await api.generateQuiz();
@@ -331,6 +368,7 @@ export const useEarnLock = create<EarnLockState>()(
           recapChecked: false,
         }),
       fetchBalance: async () => {
+        if (!get().authed) return;
         try {
           const balance = await api.getBalance();
           set({
@@ -358,9 +396,9 @@ export const useEarnLock = create<EarnLockState>()(
           unlockUntil: Math.max(Date.now(), s.unlockUntil) + SOS_MS,
         })),
 
-      // Wipe progress back to a fresh first-run state (demo reset).
+      // Wipe progress back to a fresh first-run state, including the stored session.
       resetAll: async () => {
-        await api.logout();
+        await api.signOut();
         set({ ...initial });
       },
     }),
@@ -372,7 +410,6 @@ export const useEarnLock = create<EarnLockState>()(
         onboarded: s.onboarded,
         name: s.name,
         account: s.account,
-        authEmail: s.authEmail,
         age: s.age,
         hoursPerDay: s.hoursPerDay,
         hoursEstimated: s.hoursEstimated,

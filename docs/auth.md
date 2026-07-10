@@ -27,17 +27,20 @@ These are dashboard-level settings, not something checked into code. Set under
 
 ## 2. Auth flow
 
-1. Client calls `POST /auth/register` or `POST /auth/login` on the **EarnLock backend**
-   (not Supabase directly) — see [`api-contract.md`](./api-contract.md#2-auth).
-2. The backend passes the request straight through to Supabase Auth
-   (`/auth/v1/signup` or `/auth/v1/token?grant_type=password`) using the project's
-   `SUPABASE_URL` + `SUPABASE_ANON_KEY`.
-3. On signup, Supabase inserts a row into `auth.users`, which fires the
+1. The client obtains an OIDC identity token from the native provider (Sign in with
+   Apple, or the Google Sign-In SDK). EarnLock has no passwords.
+2. Client calls `POST /auth/oauth` on the **EarnLock backend** (not Supabase directly) —
+   see [`api-contract.md`](./api-contract.md#2-auth).
+3. The backend exchanges the identity token with Supabase Auth
+   (`/auth/v1/token?grant_type=id_token`) using the project's `SUPABASE_URL` +
+   `SUPABASE_ANON_KEY`, so the anon key never ships in the app bundle. Supabase verifies
+   the token's signature against the provider's JWKS.
+4. On first sign-in, Supabase inserts a row into `auth.users`, which fires the
    `on_auth_user_created` trigger ([`0007_new_user_provisioning.sql`](../backend/migrations/0007_new_user_provisioning.sql))
    and provisions `public.users` / `public.profiles` / `public.screentime_balance` in one
-   transaction. `grade_or_age` is carried through as Supabase Auth signup metadata
-   (`data.grade_or_age` in the signup payload) so the trigger can read it via
-   `raw_user_meta_data ->> 'grade_or_age'`.
+   transaction. The id_token grant carries **no signup metadata**, so `grade_or_age`
+   always takes the trigger's `'unspecified'` fallback; the client corrects it with
+   `PUT /profile` once onboarding knows the learner's age.
    ([`0011_hardening_and_email_sync.sql`](../backend/migrations/0011_hardening_and_email_sync.sql)
    adds an `on_auth_user_email_changed` trigger that mirrors Supabase-side email
    changes into `public.users.email`, so the provisioned row can't drift. Note: 0011 is
@@ -122,21 +125,23 @@ Exact request/response shapes are the contract in
 [`api-contract.md` §2](./api-contract.md#2-auth) — reproduced here with the auth-specific
 notes:
 
-- **`POST /auth/register`** — body: `email`, `password` (min 8 chars, enforced by
-  Supabase), `grade_or_age`. `grade_or_age` is required by EarnLock (NOT NULL on
-  `public.users`) even though Supabase itself doesn't need it — the backend validates it
-  before calling Supabase: presence **and** format, using the same whitelist as
-  `PUT /profile` (`backend/app/validation.py`: `Kindergarten`, `1st grade` … `12th grade`,
-  or an age 5–18; the value is canonicalized before it's stored).
-- **`POST /auth/login`** — body: `email`, `password`.
-- Both return `{ "user": { "id", "email", "grade_or_age" }, "token": "<jwt>" }` on
-  success (register `201`, login `200`). The frontend never decodes the JWT to get
-  `grade_or_age` — it's flattened into the response `user` object directly.
+- **`POST /auth/oauth`** — body: `provider` (`apple` | `google`), `id_token`, and for
+  Apple a raw `nonce`. The client hashes the nonce with SHA-256 before handing it to
+  Apple and sends the **raw** value here; Supabase re-hashes and compares it against the
+  token's `nonce` claim. Google's native SDK exposes no nonce, so the provider needs
+  *Skip nonce check* enabled on the Supabase dashboard.
+- **`POST /auth/refresh`** — body: `refresh_token`. Access tokens are short-lived; without
+  this every client would begin 401ing about an hour after signing in.
+- Both return `{ "user": { "id", "email", "grade_or_age" }, "token", "refresh_token",
+  "expires_in" }` with `200`. `email` may be `null` (an Apple user can decline the email
+  scope). `grade_or_age` is read from `public.users`, not from the JWT — it reads
+  `"unspecified"` for a brand-new account until `PUT /profile` sets it.
 - Failures use the contract's error envelope `{ "error": { "code", "message" } }`:
-  missing/invalid body or non-whitelisted `grade_or_age` → `400 validation_error`;
-  duplicate email on register → `409 conflict`; bad credentials on login →
-  `401 unauthorized`; Supabase Auth itself failing with a 5xx →
-  `502 upstream_error` ("auth service unavailable") rather than passing the 5xx through.
+  unknown provider or missing/oversized `id_token` → `400 validation_error`; a rejected
+  token, a nonce mismatch, **or a provider that isn't enabled on the Supabase project** →
+  `401 unauthorized` (the upstream message is passed through, which is what distinguishes
+  them); Supabase Auth itself failing with a 5xx → `502 upstream_error`
+  ("auth service unavailable") rather than passing the 5xx through.
 - Client stores `token` in `expo-secure-store` and sends
   `Authorization: Bearer <token>` on every subsequent request. There is no separate
   refresh-token exchange exposed yet — when the access token expires the client

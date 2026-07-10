@@ -160,8 +160,9 @@ performed by the backend via `service_role`, which bypasses RLS.
 `handle_new_user()` runs `AFTER INSERT ON auth.users` (SECURITY DEFINER) and creates,
 in FK order, the three baseline rows: `users` → `profiles` → `screentime_balance`.
 `grade_or_age` is read from the signup metadata
-(`raw_user_meta_data->>'grade_or_age'`, which `POST /auth/register` should set), with a
-`'unspecified'` fallback so a signup can never fail. Every insert is
+(`raw_user_meta_data->>'grade_or_age'`), with an `'unspecified'` fallback so a signup can
+never fail. Since EarnLock moved to OAuth-only sign-in the id_token grant carries no
+metadata, so that fallback is now the normal path and `PUT /profile` corrects it. Every insert is
 `ON CONFLICT DO NOTHING`.
 
 ---

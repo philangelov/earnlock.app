@@ -13,6 +13,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useLockEnforcement } from '@/lib/screenTime/enforcement';
 import { useScreenTime } from '@/lib/screenTime/store';
+import { useEarnLock } from '@/store/useEarnLock';
 import { makeNavTheme } from '@/theme/navTheme';
 import { ThemeProvider, useThemeMode, useTokens } from '@/theme/theme';
 
@@ -34,6 +35,13 @@ function RootNavigator() {
     });
     return () => sub.remove();
   }, [refreshScreenTime]);
+
+  // The session lives in SecureStore, not in the persisted store, so read it once at launch.
+  // Screens gate on `authed` rather than firing requests that can only come back 401.
+  const hydrateAuth = useEarnLock((s) => s.hydrateAuth);
+  useEffect(() => {
+    void hydrateAuth();
+  }, [hydrateAuth]);
 
   // Keep the OS shield in sync with the earn clock for the whole app lifetime.
   useLockEnforcement();
