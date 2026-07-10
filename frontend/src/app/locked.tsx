@@ -5,7 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/components/Button';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
-import { MC_COUNT } from '@/store/content';
+import { QUIZ_QUESTIONS } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -60,7 +60,7 @@ export default function LockedScreen() {
         <View style={[styles.reward, { backgroundColor: t.accentSoft }]}>
           <Sym name="bolt.fill" size={15} color={t.accentText} />
           <Text style={[Type.subheadStrong, { color: t.accentText }]}>
-            {MC_COUNT + 1} correct = 15 minutes
+            {QUIZ_QUESTIONS} correct = 15 minutes
           </Text>
         </View>
       </View>

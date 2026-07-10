@@ -11,7 +11,7 @@
 - **Base URL:** `EARNLOCK_API_URL` (e.g. `https://api.earnlock.app`). All paths below are
   relative to it.
 - **Format:** JSON in, JSON out. `Content-Type: application/json`.
-- **Auth:** every endpoint except `/health`, `/auth/register`, `/auth/login` requires:
+- **Auth:** every endpoint except `/health`, `/auth/oauth`, `/auth/refresh` requires:
   ```
   Authorization: Bearer <supabase_jwt>
   ```
@@ -45,8 +45,8 @@ Every non-2xx response uses this body:
 | Method | Path | Auth | Purpose | Status |
 |---|---|---|---|---|
 | GET | `/health` | no | liveness check | implemented |
-| POST | `/auth/register` | no | create account | implemented |
-| POST | `/auth/login` | no | obtain JWT | implemented |
+| POST | `/auth/oauth` | no | sign in with Apple/Google, obtain JWT | implemented |
+| POST | `/auth/refresh` | no | trade a refresh token for a new JWT | implemented |
 | GET | `/profile` | yes | read profile | implemented |
 | PUT | `/profile` | yes | update profile | implemented |
 | POST | `/knowledge/import` | yes | import study material (text or link) | **not yet implemented** |
@@ -75,50 +75,67 @@ backend has not shipped them yet.
 
 ## 2. Auth
 
-Auth is backed by Supabase Auth. These endpoints are thin passthroughs to Supabase's
-`/auth/v1/signup` and `/auth/v1/token?grant_type=password`, but the contract is fixed so
-the client depends only on EarnLock. Email confirmation is **disabled** on the Supabase
-project, so both endpoints return a usable token immediately — no "check your email" step.
-Full JWT claim schema and rationale: [`docs/auth.md`](./auth.md).
+Auth is backed by Supabase Auth. **EarnLock has no passwords** — the only way in is Sign in
+with Apple or Sign in with Google. The client obtains an OpenID Connect identity token from
+the native provider SDK and posts it here; the backend exchanges it with Supabase's
+`/auth/v1/token?grant_type=id_token`, which verifies the token against the provider's JWKS.
 
-### `POST /auth/register`
+Doing the exchange server-side keeps the Supabase anon key out of the app bundle. Full JWT
+claim schema and rationale: [`docs/auth.md`](./auth.md).
+
+### `POST /auth/oauth`
 **Request**
 ```json
 {
-  "email": "kid@example.com",
-  "password": "string (min 8)",
-  "grade_or_age": "5th grade"
+  "provider": "apple | google",
+  "id_token": "the provider's OIDC identity token",
+  "nonce": "raw nonce (Apple only; omit for Google)"
 }
-```
-**Response 201**
-```json
-{
-  "user": { "id": "uuid", "email": "kid@example.com", "grade_or_age": "5th grade" },
-  "token": "jwt"
-}
-```
-**Errors:** `400 validation_error` (missing fields, or `grade_or_age` not in the same
-whitelist `PUT /profile` enforces — a recognised grade like `Kindergarten`/`1st grade`…
-`12th grade`, or an age 5–18; the value is canonicalized before storage), `409 conflict`
-(email exists), `502 upstream_error` (Supabase Auth 5xx).
-
-### `POST /auth/login`
-**Request**
-```json
-{ "email": "kid@example.com", "password": "string" }
 ```
 **Response 200**
 ```json
 {
-  "user": { "id": "uuid", "email": "kid@example.com", "grade_or_age": "5th grade" },
-  "token": "jwt"
+  "user": { "id": "uuid", "email": "kid@example.com | null", "grade_or_age": "5th grade" },
+  "token": "jwt",
+  "refresh_token": "opaque",
+  "expires_in": 3600
 }
 ```
-**Errors:** `400 validation_error`, `401 unauthorized` (bad credentials),
-`502 upstream_error` (Supabase Auth 5xx).
 
-> The `token` is stored client-side in `expo-secure-store` and sent as the Bearer token on
-> every subsequent request.
+`email` is `null` when the provider withholds it (an Apple user may decline the email
+scope). `grade_or_age` is read from `public.users`, not from the token: the id_token grant
+carries no signup metadata, so a brand-new account reads `"unspecified"` until the client
+follows up with `PUT /profile`.
+
+**Errors:** `400 validation_error` (unknown provider, missing/oversized `id_token`),
+`401 unauthorized` (token rejected, nonce mismatch, **or the provider is not enabled on the
+Supabase project** — the upstream message is passed through, which is what tells you which),
+`502 upstream_error` (Supabase Auth 5xx or unreachable).
+
+### `POST /auth/refresh`
+Access tokens are short-lived. Trade a refresh token for a new pair.
+
+**Request**
+```json
+{ "refresh_token": "opaque" }
+```
+**Response 200** — identical body to `POST /auth/oauth`.
+
+**Errors:** `400 validation_error`, `401 unauthorized` (expired/revoked/rotated away),
+`502 upstream_error`.
+
+> Both tokens are stored client-side in `expo-secure-store`. The access token is sent as the
+> Bearer token on every subsequent request; on a `401` the client refreshes once and replays
+> the request before surfacing an error.
+
+### Apple's nonce
+
+The client generates a random raw nonce, hands **SHA-256(raw)** to Apple, and sends the
+**raw** value here. Supabase hashes it again and compares against the `nonce` claim inside
+the signed token. Sending the hash to both ends, or the raw value to Apple, fails the check.
+
+Google's native SDK does not surface a nonce, so it is omitted; the Supabase Google provider
+must have *Skip nonce check* enabled for iOS.
 
 ---
 
@@ -150,7 +167,7 @@ ignored if sent.
 ```
 **Response 200** — same shape as `GET /profile`.
 **Validation:** `focus_subjects` must be a non-empty subset of the known subject list
-(`Math`, `History`, `Biology`, `English`); `grade_or_age` must be a recognised grade/age.
+(`Math`, `History`, `Biology`, `English`, `Physics`, `Chemistry`, `Geography`, `Coding`); `grade_or_age` must be a recognised grade/age.
 **Errors:** `400 validation_error`, `404 not_found` (profile rows missing),
 `500 internal_error` (datastore failure). `GET /profile` can return the same `404`/`500`.
 

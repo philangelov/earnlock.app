@@ -16,7 +16,20 @@ from app.text_extraction import is_valid_http_url
 
 # --- Focus subjects -------------------------------------------------------------
 # Canonical set from docs/api-contract.md §3. Stored with this exact casing.
-VALID_SUBJECTS = ("Math", "History", "Biology", "English")
+# Must stay in step with the subjects the app actually offers (SUBJECT_DEFS in
+# frontend/src/store/content.ts) — anything the picker shows but this rejects turns a
+# perfectly ordinary selection into a 400 on PUT /profile. The generator only
+# interpolates these names into its prompt, so the list is free to grow.
+VALID_SUBJECTS = (
+    "Math",
+    "History",
+    "Biology",
+    "English",
+    "Physics",
+    "Chemistry",
+    "Geography",
+    "Coding",
+)
 _SUBJECT_LOOKUP = {s.lower(): s for s in VALID_SUBJECTS}
 
 # --- Grade / age ----------------------------------------------------------------
@@ -159,3 +172,53 @@ def validate_profile_update(body):
         raise ValidationError("Provide at least one of: grade_or_age, focus_subjects.")
 
     return user_fields, profile_fields
+
+
+# --- OAuth sign-in ---------------------------------------------------------------
+# Apple and Google only; EarnLock has no password auth. The upstream verifies the token
+# signature — these bounds only keep obvious junk and oversized payloads off the wire.
+OAUTH_PROVIDERS = ("apple", "google")
+
+# A signed JWT with Apple/Google claims sits well under 2 KB; the ceiling is generous.
+_MAX_ID_TOKEN_CHARS = 8192
+_MAX_NONCE_CHARS = 256
+_MAX_REFRESH_TOKEN_CHARS = 1024
+
+
+def _require_bounded_string(value, field, maximum):
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError(f"{field} is required.")
+    if len(value) > maximum:
+        raise ValidationError(f"{field} is too long.")
+    return value.strip()
+
+
+def validate_oauth_signin(body):
+    """Return (provider, id_token, nonce|None) for POST /auth/oauth."""
+    if not isinstance(body, dict):
+        raise ValidationError("Request body must be a JSON object.")
+
+    provider = body.get("provider")
+    if provider not in OAUTH_PROVIDERS:
+        raise ValidationError(f"provider must be one of: {', '.join(OAUTH_PROVIDERS)}.")
+
+    id_token = _require_bounded_string(
+        body.get("id_token"), "id_token", _MAX_ID_TOKEN_CHARS
+    )
+
+    # Apple requires the raw nonce whose SHA-256 is embedded in the token. Google's
+    # native flow may omit it (the project's "skip nonce check" setting decides).
+    nonce = body.get("nonce")
+    if nonce is not None:
+        nonce = _require_bounded_string(nonce, "nonce", _MAX_NONCE_CHARS)
+
+    return provider, id_token, nonce
+
+
+def validate_refresh_token(body):
+    """Return the refresh token for POST /auth/refresh."""
+    if not isinstance(body, dict):
+        raise ValidationError("Request body must be a JSON object.")
+    return _require_bounded_string(
+        body.get("refresh_token"), "refresh_token", _MAX_REFRESH_TOKEN_CHARS
+    )

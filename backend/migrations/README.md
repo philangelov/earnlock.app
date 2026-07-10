@@ -108,6 +108,15 @@ supabase gen types typescript --project-id vkscemjmpyabipuyifgf > ../../frontend
       the only remaining advisor items are the expected `quizzes` deny-all INFO, the
       unused `idx_quizzes_user_id` INFO (kept — it indexes the FK, no composite twin),
       and the Auth leaked-password dashboard setting (see `../docs/rls.md` §6).
-- [x] Migrations 0001–0012 applied to the live project. **Manual step still open:**
-      enable leaked-password protection in the Supabase dashboard
-      (Authentication → Providers → Password) to clear the last WARN advisor.
+- [x] Migrations 0001–0012 applied to the live project.
+- [x] **0013_oauth_only_auth applied.** Drops NOT NULL from `public.users.email`, which
+      Sign in with Apple requires: a user who declines the email scope arrives with no
+      email, and `handle_new_user()` would otherwise raise 23502 and fail the sign-in.
+- **Manual dashboard steps (no SQL, no MCP tool can do these):**
+  1. Authentication → Providers → **Apple**: enable, and put the app's bundle ID
+     (`com.filipangelov.earnlock`) in *Client IDs*.
+  2. Authentication → Providers → **Google**: enable, add the Web and iOS OAuth client IDs
+     (web first, comma-separated) and turn on *Skip nonce check*.
+  3. Authentication → Providers → **Email**: disable. EarnLock has no passwords since the
+     move to OAuth-only auth, and disabling it also clears the standing
+     leaked-password-protection WARN advisor rather than merely silencing it.

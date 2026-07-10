@@ -10,7 +10,7 @@ import { StepHeader } from '@/components/StepHeader';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
 import { useScreenTime } from '@/lib/screenTime/store';
-import { MC_COUNT } from '@/store/content';
+import { QUIZ_QUESTIONS } from '@/store/content';
 import { requiresLockedApps, STEP_TOTAL, stepIndex } from '@/store/onboarding';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
@@ -178,7 +178,7 @@ export default function AppsScreen() {
           <Sym name="bolt.fill" size={18} color={t.onAccent} weight="bold" />
         </View>
         <Text style={[Type.subheadStrong, { color: t.text, flex: 1 }]}>
-          {MC_COUNT + 1} correct answers earn 15 minutes of screen time.
+          {QUIZ_QUESTIONS} correct answers earn 15 minutes of screen time.
         </Text>
       </View>
 

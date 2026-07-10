@@ -39,72 +39,16 @@ export const SUBJECT_DEFS: SubjectDef[] = [
 
 /* -------------------------------------------------------------- quiz material */
 
-export type QuizOption = { e: string; t: string };
-export type Question = {
-  tag: string;
-  q: string;
-  opts: QuizOption[];
-  answer: number;
-  explain: string;
-};
-
-export const QUESTIONS: Question[] = [
-  {
-    tag: 'Biology',
-    q: 'Which organelle is the “powerhouse” of the cell?',
-    opts: [
-      { e: '📦', t: 'Golgi apparatus' },
-      { e: '⚡', t: 'Mitochondrion' },
-      { e: '🧬', t: 'Nucleus' },
-      { e: '🔬', t: 'Ribosome' },
-    ],
-    answer: 1,
-    explain:
-      'Mitochondria turn nutrients and oxygen into ATP — the chemical fuel your cells run on. Because they make most of that energy, biologists nickname them the powerhouse of the cell.',
-  },
-  {
-    tag: 'History',
-    q: 'In which year did the Berlin Wall fall?',
-    opts: [
-      { e: '📻', t: '1979' },
-      { e: '🧱', t: '1989' },
-      { e: '📼', t: '1991' },
-      { e: '🚀', t: '1985' },
-    ],
-    answer: 1,
-    explain:
-      'On 9 November 1989, eased travel rules and huge peaceful protests brought crowds to the checkpoints and the Berlin Wall was opened — paving the way for German reunification in 1990.',
-  },
-  {
-    tag: 'Physics',
-    q: 'What force pulls a dropped apple toward the ground?',
-    opts: [
-      { e: '🧲', t: 'Magnetism' },
-      { e: '🌍', t: 'Gravity' },
-      { e: '💨', t: 'Air pressure' },
-      { e: '⚡', t: 'Static charge' },
-    ],
-    answer: 1,
-    explain:
-      'Gravity is the attraction between masses. Earth’s enormous mass pulls the apple downward at about 9.8 m/s² — the same force that keeps the Moon in orbit.',
-  },
-  {
-    tag: 'Geography',
-    q: 'Which is the longest river in the world?',
-    opts: [
-      { e: '🌊', t: 'Amazon' },
-      { e: '🏜️', t: 'Nile' },
-      { e: '🐉', t: 'Yangtze' },
-      { e: '🦅', t: 'Mississippi' },
-    ],
-    answer: 1,
-    explain:
-      'The Nile runs about 6,650 km through north-east Africa. (The Amazon is a very close second and carries far more water — but the Nile edges it on length.)',
-  },
-];
-
-/** Multiple-choice questions before the fill-in-the-blank recap. */
-export const MC_COUNT = QUESTIONS.length;
+/**
+ * Questions in a normal quiz. Mirrors the backend's `QUIZ_LEN_NORMAL` (and its
+ * `QUIZ_CORRECT_TARGET`, which is the same number) — the server generates and grades every
+ * quiz, so this constant exists only for copy that promises the deal up front.
+ *
+ * It replaces a mock question bank whose `length` used to stand in for this, which is why
+ * the old copy read `MC_COUNT + 1`: four fake questions plus the recap happened to equal
+ * the real quiz length.
+ */
+export const QUIZ_QUESTIONS = 5;
 
 export const RECAP = {
   tag: 'Recap',

@@ -7,10 +7,10 @@
 -- has no grant on, and pins search_path = '' against path-hijacking. Every insert is
 -- ON CONFLICT DO NOTHING so a reprovision or race can never fail a signup.
 --
--- grade_or_age is NOT NULL in public.users. The recommended registration flow is for
--- POST /auth/register to pass it in the Supabase signup metadata
--- (options.data.grade_or_age), which this trigger reads. If it is ever absent we fall
--- back to 'unspecified' so signup still succeeds; the backend can correct it later.
+-- grade_or_age is NOT NULL in public.users. It is read from the Supabase signup metadata
+-- (options.data.grade_or_age). Since EarnLock moved to OAuth-only sign-in the id_token
+-- grant has no metadata channel, so the 'unspecified' fallback below is the normal path;
+-- the client corrects it with PUT /profile. See migration 0013.
 
 create or replace function public.handle_new_user()
 returns trigger

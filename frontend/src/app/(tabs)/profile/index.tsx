@@ -12,12 +12,20 @@ import { LEARNER, SUBJECT_DEFS } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
-import { useThemeMode, useTokens } from '@/theme/theme';
+import { useThemeMode, useTokens, type ThemeMode } from '@/theme/theme';
+
+/** Order of the appearance control. `system` sits first because it's the default. */
+const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark'];
+const THEME_LABELS: Record<ThemeMode, string> = {
+  system: 'System',
+  light: 'Light',
+  dark: 'Dark',
+};
 
 export default function ProfileScreen() {
   const t = useTokens();
   const router = useRouter();
-  const { dark, setDark } = useThemeMode();
+  const { mode, setMode } = useThemeMode();
 
   const grade = useEarnLock((s) => s.grade);
   const subj = useEarnLock((s) => s.subj);
@@ -149,13 +157,13 @@ export default function ProfileScreen() {
       </ListGroup>
 
       {/* Appearance */}
-      <ListGroup header="Appearance">
+      <ListGroup header="Appearance" footer="System follows your device’s light or dark setting.">
         <View style={styles.appearanceRow}>
-          <Text style={[Type.body, { color: t.text }]}>Theme</Text>
           <Segmented
-            options={['Light', 'Dark']}
-            index={dark ? 1 : 0}
-            onChange={(i) => setDark(i === 1)}
+            options={THEME_MODES.map((m) => THEME_LABELS[m])}
+            index={THEME_MODES.indexOf(mode)}
+            onChange={(i) => setMode(THEME_MODES[i])}
+            fullWidth
           />
         </View>
       </ListGroup>
@@ -221,10 +229,13 @@ function Segmented({
   options,
   index,
   onChange,
+  fullWidth,
 }: {
   options: string[];
   index: number;
   onChange: (i: number) => void;
+  /** Stretch the segments to share the row equally — three labels won't fit beside a title. */
+  fullWidth?: boolean;
 }) {
   const t = useTokens();
   const { dark } = useThemeMode();
@@ -233,7 +244,9 @@ function Segmented({
   // lighter fillStrong instead.
   const thumb = dark ? t.fillStrong : t.surface;
   return (
-    <View style={[styles.segmented, { backgroundColor: t.fill }]}>
+    <View
+      style={[styles.segmented, fullWidth && styles.segmentedFull, { backgroundColor: t.fill }]}
+    >
       {options.map((opt, i) => {
         const active = i === index;
         return (
@@ -247,7 +260,11 @@ function Segmented({
               haptic.select();
               onChange(i);
             }}
-            style={[styles.segment, active && { backgroundColor: thumb }]}
+            style={[
+              styles.segment,
+              fullWidth && styles.segmentFull,
+              active && { backgroundColor: thumb },
+            ]}
           >
             <Text style={[Type.footnoteStrong, { color: active ? t.text : t.text2 }]}>{opt}</Text>
           </Pressable>
@@ -277,19 +294,14 @@ const styles = StyleSheet.create({
   miniStat: { alignItems: 'center', gap: 2 },
   miniDivider: { width: StyleSheet.hairlineWidth, height: 30 },
 
-  appearanceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    minHeight: 52,
-  },
+  appearanceRow: { paddingVertical: 10, paddingHorizontal: 12 },
   segmented: { flexDirection: 'row', padding: 2, borderRadius: Radius.chip, gap: 2 },
+  segmentedFull: { alignSelf: 'stretch' },
   segment: {
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: Radius.chip - 2,
     borderCurve: 'continuous',
   },
+  segmentFull: { flex: 1, paddingHorizontal: 0, alignItems: 'center' },
 });

@@ -189,10 +189,12 @@ Full-screen steps, each with a pinned "Continue" `PrimaryButton`:
 *(Planned wiring: save via `PUT /profile` after register/login. On iOS the blacklist step
 will open the native `FamilyActivityPicker` — not yet implemented.)*
 
-### 7.3 Auth (login / register) — **not yet implemented in the frontend**
-The backend exposes `POST /auth/register` and `POST /auth/login` (Supabase Auth JWTs),
-but there are no auth screens yet. Planned: email + password fields on `surface` inputs,
-primary CTA, secondary link to switch mode; store the JWT and continue to the tabs.
+### 7.3 Auth — Sign in with Apple / Google
+`onboarding/account.tsx`. EarnLock has no passwords: two provider buttons (Apple's inverts
+with the interface per Apple's guidance; Google's keeps its four-colour mark) plus a Skip.
+The native sheet returns an identity token, `POST /auth/oauth` exchanges it for a session,
+and the tokens go to `expo-secure-store`. A skipped user can browse but cannot earn time —
+quizzes are generated and graded server-side.
 
 ### 7.4 Home tab — `(tabs)/home`
 The lock/timer screen, both states in one screen:

@@ -32,6 +32,7 @@ export default function QuizScreen() {
   const qIndex = useEarnLock((s) => s.qIndex);
   const selected = useEarnLock((s) => s.selected);
   const quizError = useEarnLock((s) => s.quizError);
+  const authed = useEarnLock((s) => s.authed);
   const beginQuiz = useEarnLock((s) => s.beginQuiz);
   const pick = useEarnLock((s) => s.pick);
   const nextQuestion = useEarnLock((s) => s.nextQuestion);
@@ -75,11 +76,21 @@ export default function QuizScreen() {
           {quizError ? (
             <>
               <Text style={[Type.body, { color: t.danger, textAlign: 'center' }]}>{quizError}</Text>
-              <Button
-                label="Try again"
-                onPress={() => beginQuiz()}
-                style={{ marginTop: Space.lg }}
-              />
+              {/* Retrying a quiz you aren't allowed to fetch just fails again — send the
+                  signed-out user somewhere that can actually change the outcome. */}
+              {authed ? (
+                <Button
+                  label="Try again"
+                  onPress={() => beginQuiz()}
+                  style={{ marginTop: Space.lg }}
+                />
+              ) : (
+                <Button
+                  label="Sign in"
+                  onPress={() => router.replace('/onboarding/account')}
+                  style={{ marginTop: Space.lg }}
+                />
+              )}
             </>
           ) : (
             <ActivityIndicator color={t.accent} />

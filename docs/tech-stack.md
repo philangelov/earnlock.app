@@ -84,9 +84,9 @@
   per-user data isolation enforced at the database, not just the app layer.
 - **Integration strategy:**
   - **Mobile** never talks to Supabase directly: it calls the backend's
-    `POST /auth/register` / `POST /auth/login`, which proxy Supabase Auth and return the JWT
-    (see [`auth.md`](./auth.md) §2). It does not query app tables directly; all app data goes
-    through the Flask API.
+    `POST /auth/oauth` / `POST /auth/refresh`, which exchange an Apple/Google identity token
+    with Supabase Auth and return the JWT (see [`auth.md`](./auth.md) §2). It does not query
+    app tables directly; all app data goes through the Flask API.
   - **Backend** uses the Supabase service-role key (server-side only) for data access via
     PostgREST over HTTP (stdlib `urllib`, see `backend/app/services/supabase.py` — no
     `psycopg` or extra HTTP dependency), and validates the user's JWT on every request.
