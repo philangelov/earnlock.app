@@ -1,141 +1,184 @@
-import { useRouter } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useMemo } from 'react';
+import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
-import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
-import { ListGroup, ListRow, SectionHeader } from '@/components/List';
+import { Roadmap, type Chapter, type RoadmapNode } from '@/components/learn/Roadmap';
+import { StatGlyph, type StatRole } from '@/components/StatGlyph';
 import { Sym } from '@/components/Sym';
 import { TabScreen } from '@/components/TabScreen';
-import { COURSE, STREAK_DAYS, SUBJECT_DEFS, type Lesson } from '@/store/content';
+import type { QuizAttempt } from '@/lib/api';
+import { useStats } from '@/store/stats';
+import { CHAPTER_SIZE, SUBJECT_DEFS } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
 import { useTokens } from '@/theme/theme';
 
+/** "Math & History", "Math, History & Biology", "Math, History +3". */
+function focusLabel(subjects: string[]): string {
+  if (subjects.length === 0) return 'General knowledge';
+  if (subjects.length === 1) return subjects[0];
+  if (subjects.length === 2) return `${subjects[0]} & ${subjects[1]}`;
+  if (subjects.length === 3) return `${subjects[0]}, ${subjects[1]} & ${subjects[2]}`;
+  return `${subjects[0]}, ${subjects[1]} +${subjects.length - 2}`;
+}
+
+/**
+ * Turn the raw history into chapters of five.
+ *
+ * Positions are global: the newest attempt sits at index `completed - 1`, so a chapter
+ * number stays correct even though the server only sends back the most recent attempts.
+ * The active node is always at `completed % CHAPTER_SIZE` of the current chapter — it is
+ * literally the next quiz `/quiz/generate` will produce.
+ */
+function buildChapters(completed: number, recent: QuizAttempt[], focus: string): Chapter[] {
+  const attemptAt = new Map<number, QuizAttempt>();
+  recent.forEach((attempt, fromNewest) => {
+    attemptAt.set(completed - 1 - fromNewest, attempt);
+  });
+
+  const currentChapter = Math.floor(completed / CHAPTER_SIZE);
+  // The oldest attempt we actually hold; everything before it is off the end of the page.
+  const oldestKnown = Math.max(0, completed - recent.length);
+  const firstChapter = Math.min(Math.floor(oldestKnown / CHAPTER_SIZE), currentChapter);
+
+  const chapters: Chapter[] = [];
+  for (let chapter = firstChapter; chapter <= currentChapter; chapter++) {
+    const nodes: RoadmapNode[] = [];
+    let correct = 0;
+    let total = 0;
+    let scored = 0;
+
+    for (let slot = 0; slot < CHAPTER_SIZE; slot++) {
+      const globalIndex = chapter * CHAPTER_SIZE + slot;
+      const attempt = attemptAt.get(globalIndex);
+      const state: RoadmapNode['state'] =
+        globalIndex < completed ? 'done' : globalIndex === completed ? 'active' : 'locked';
+
+      if (attempt?.total_count != null) {
+        correct += attempt.correct_count;
+        total += attempt.total_count;
+        scored += 1;
+      }
+
+      nodes.push({
+        key: `${chapter}-${slot}`,
+        state,
+        score:
+          state === 'done' && attempt?.total_count != null
+            ? `${attempt.correct_count}/${attempt.total_count}`
+            : undefined,
+      });
+    }
+
+    const doneInChapter = Math.max(0, Math.min(CHAPTER_SIZE, completed - chapter * CHAPTER_SIZE));
+    const isCurrent = chapter === currentChapter;
+
+    chapters.push({
+      number: chapter + 1,
+      title: isCurrent
+        ? focus
+        : // Only claim a chapter score when every one of its attempts is in hand —
+          // summing the three we happen to still hold would quietly understate it.
+          scored === CHAPTER_SIZE
+          ? `${correct} of ${total} correct`
+          : 'Completed',
+      ringLabel: `${doneInChapter}/${CHAPTER_SIZE}`,
+      progress: doneInChapter / CHAPTER_SIZE,
+      nodes,
+    });
+  }
+
+  // Newest chapter first: the active node — the only thing on this page you can press —
+  // then belongs to the first screenful instead of the last.
+  return chapters.reverse();
+}
+
 export default function LearnScreen() {
   const t = useTokens();
   const router = useRouter();
-  const streak = useEarnLock((s) => s.streak);
+  const { width } = useWindowDimensions();
+
   const subj = useEarnLock((s) => s.subj);
   const resetQuizFlow = useEarnLock((s) => s.resetQuizFlow);
 
-  const startQuiz = () => {
+  const stats = useStats((s) => s.data);
+  const refreshing = useStats((s) => s.refreshing);
+  const fetchStats = useStats((s) => s.fetch);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchStats();
+    }, [fetchStats]),
+  );
+
+  const startQuiz = useCallback(() => {
     resetQuizFlow();
     router.push('/quiz');
-  };
+  }, [resetQuizFlow, router]);
 
-  const focus = SUBJECT_DEFS.filter((s) => subj[s.key]);
-  const doneCount = COURSE.lessons.filter((l) => l.state === 'done').length;
-  const activeIndex = COURSE.lessons.findIndex((l) => l.state === 'active');
+  const focus = useMemo(
+    () => focusLabel(SUBJECT_DEFS.filter((s) => subj[s.key]).map((s) => s.key)),
+    [subj],
+  );
 
-  const lessonMeta = (l: Lesson) => {
-    if (l.state === 'done')
-      return { icon: 'checkmark' as const, color: t.accentText, bg: t.accentSoft };
-    if (l.state === 'active')
-      return { icon: 'play.fill' as const, color: t.onAccent, bg: t.accent };
-    return { icon: 'lock.fill' as const, color: t.text3, bg: t.fill };
-  };
+  const completed = stats?.totals.quizzes ?? 0;
+  const chapters = useMemo(
+    () => buildChapters(completed, stats?.recent ?? [], focus),
+    [completed, stats?.recent, focus],
+  );
+
+  const trailWidth = width - Space.xl * 2;
+  const accuracy = stats?.totals.accuracy;
 
   return (
-    <TabScreen contentStyle={styles.content}>
-      {/* Streak */}
-      <Card style={styles.streakCard}>
-        <View style={styles.streakHead}>
-          <View style={[styles.flame, { backgroundColor: t.accentSoft }]}>
-            <Sym name="flame.fill" size={18} color={t.accentText} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[Type.headline, { color: t.text }]}>{streak}-day streak</Text>
-            <Text style={[Type.footnote, { color: t.text2 }]}>Learn today to keep it alive</Text>
-          </View>
-        </View>
-        <View style={styles.days}>
-          {STREAK_DAYS.map((d, i) => (
-            <View key={i} style={styles.dayCol}>
-              <View
-                style={[
-                  styles.dayDot,
-                  d.done
-                    ? { backgroundColor: t.accent }
-                    : {
-                        backgroundColor: t.fillStrong,
-                        borderWidth: d.today ? 2 : 0,
-                        borderColor: t.accent,
-                      },
-                ]}
-              >
-                {d.done && <Sym name="checkmark" size={12} color={t.onAccent} weight="bold" />}
-              </View>
-              <Text style={[Type.caption, { color: d.today ? t.text : t.text3 }]}>{d.d}</Text>
-            </View>
-          ))}
-        </View>
-      </Card>
+    <TabScreen
+      contentStyle={styles.content}
+      refreshing={refreshing}
+      onRefresh={() => void fetchStats({ force: true })}
+    >
+      <View style={styles.pills}>
+        <Pill role="streak" value={String(stats?.streak.current ?? 0)} label="day streak" />
+        <Pill
+          role="quizzes"
+          value={String(completed)}
+          label={completed === 1 ? 'quiz done' : 'quizzes done'}
+        />
+        {accuracy != null && (
+          <Pill role="accuracy" value={`${Math.round(accuracy * 100)}%`} label="accuracy" />
+        )}
+      </View>
 
-      {/* Continue course */}
-      <View style={styles.section}>
-        <SectionHeader title="Continue learning" />
-        <Card style={styles.courseCard}>
-          <Text style={[Type.overline, { color: t.accentText, textTransform: 'uppercase' }]}>
-            {COURSE.subject}
+      <Roadmap chapters={chapters} width={trailWidth} onStart={startQuiz} />
+
+      {completed === 0 && (
+        <Card style={styles.hint}>
+          <Sym name="sparkles" size={17} color={t.accentText} />
+          <Text style={[Type.footnote, { color: t.text2, flex: 1 }]}>
+            Five questions, about six minutes, fifteen minutes of screen time. Your path grows a
+            node every time you finish one.
           </Text>
-          <Text style={[Type.title2, { color: t.text, marginTop: 4 }]}>{COURSE.title}</Text>
-          <Text style={[Type.footnote, { color: t.text2, marginTop: 4 }]}>
-            Lesson {activeIndex + 1} of {COURSE.lessons.length} · about 6 min to earn 15
-          </Text>
-          <View style={[styles.track, { backgroundColor: t.fill }]}>
-            <View
-              style={[
-                styles.trackFill,
-                { width: `${COURSE.progress * 100}%`, backgroundColor: t.accent },
-              ]}
-            />
-          </View>
-          <Button
-            label="Continue lesson"
-            icon={<Sym name="play.fill" size={15} color={t.onAccent} />}
-            onPress={startQuiz}
-            style={{ marginTop: Space.lg }}
-          />
         </Card>
-      </View>
-
-      {/* Lessons */}
-      <ListGroup header={`Lessons · ${doneCount}/${COURSE.lessons.length}`} style={styles.section}>
-        {COURSE.lessons.map((l, i) => {
-          const m = lessonMeta(l);
-          return (
-            <ListRow
-              key={i}
-              icon={m.icon}
-              iconColor={m.color}
-              iconBg={m.bg}
-              title={l.title}
-              subtitle={`${l.minutes} min`}
-              value={l.state === 'done' ? 'Done' : l.state === 'locked' ? undefined : 'Now'}
-              onPress={l.state === 'active' ? startQuiz : undefined}
-              showChevron={l.state === 'active'}
-            />
-          );
-        })}
-      </ListGroup>
-
-      {/* Focus subjects */}
-      <View style={styles.section}>
-        <SectionHeader title="Your subjects" />
-        <View style={styles.chips}>
-          {focus.map((s) => (
-            <View
-              key={s.key}
-              style={[styles.chip, { backgroundColor: t.surface, borderColor: t.separator }]}
-            >
-              <Sym name={s.icon} size={15} color={t.text2} />
-              <Text style={[Type.subheadStrong, { color: t.text }]}>{s.key}</Text>
-            </View>
-          ))}
-        </View>
-      </View>
+      )}
     </TabScreen>
+  );
+}
+
+function Pill({ role, value, label }: { role: StatRole; value: string; label: string }) {
+  const t = useTokens();
+  return (
+    <View
+      style={[styles.pill, { backgroundColor: t.surface, borderColor: t.separator }]}
+      accessible
+      accessibilityLabel={`${value} ${label}`}
+    >
+      <StatGlyph role={role} size={13} />
+      <Text style={[Type.footnoteStrong, { color: t.text }]}>{value}</Text>
+      <Text style={[Type.caption, { color: t.text3 }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
   );
 }
 
@@ -144,42 +187,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: Space.xl,
     paddingTop: Space.xs,
     paddingBottom: Space.xxxl,
-    gap: Space.lg,
+    gap: Space.xl,
   },
 
-  streakCard: { padding: Space.lg },
-  streakHead: { flexDirection: 'row', alignItems: 'center', gap: Space.md },
-  flame: {
-    width: 38,
-    height: 38,
-    borderRadius: Radius.control,
-    borderCurve: 'continuous',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  days: { flexDirection: 'row', justifyContent: 'space-between', marginTop: Space.lg },
-  dayCol: { alignItems: 'center', gap: 6 },
-  dayDot: {
-    width: 30,
-    height: 30,
-    borderRadius: Radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  section: { gap: 0 },
-  courseCard: { padding: Space.xl },
-  track: { height: 8, borderRadius: Radius.pill, marginTop: Space.lg, overflow: 'hidden' },
-  trackFill: { height: '100%', borderRadius: Radius.pill },
-
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Space.sm },
-  chip: {
+  pills: { flexDirection: 'row', gap: Space.sm },
+  pill: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    paddingVertical: 8,
-    paddingHorizontal: 13,
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
     borderRadius: Radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
+  },
+
+  hint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: Space.lg,
   },
 });

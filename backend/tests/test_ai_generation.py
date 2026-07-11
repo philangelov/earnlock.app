@@ -15,10 +15,12 @@ from app.ai.generator import (
     ClaudeQuestionGenerator,
     GeneratorError,
     _build_prompts,
-    generate_quiz_questions,
+    generate_quiz,
+    validate_generation,
     validate_questions,
+    validate_recap,
 )
-from app.quiz_content import QUESTION_BANK
+from app.quiz_content import QUESTION_BANK, RECAP_BANK
 
 
 def _q(prompt="What is 2+2?", options=None, correct_index=1, concept="basic sum"):
@@ -30,7 +32,23 @@ def _q(prompt="What is 2+2?", options=None, correct_index=1, concept="basic sum"
     }
 
 
+def _recap(answer="180", distractors=None, before="Angles add up to", after="degrees."):
+    return {
+        "sentence_before": before,
+        "sentence_after": after,
+        "answer": answer,
+        "distractors": distractors if distractors is not None else ["90", "360"],
+    }
+
+
 GOOD = [_q(prompt=f"Q{i}?") for i in range(7)]
+
+
+def _generation(questions=None, recap=None):
+    return {
+        "questions": GOOD if questions is None else questions,
+        "recap": _recap() if recap is None else recap,
+    }
 
 
 @pytest.fixture
@@ -86,6 +104,85 @@ def test_validate_requires_enough_questions():
         validate_questions(GOOD[:2], 5)
 
 
+# --- validate_recap (contract enforcement) -------------------------------------
+
+
+def test_recap_normalizes_to_three_options_including_the_answer():
+    recap = validate_recap(_recap())
+    assert recap["sentence_before"] == "Angles add up to"
+    assert recap["sentence_after"] == "degrees."
+    assert recap["answer"] == "180"
+    assert sorted(recap["options"]) == sorted(["180", "90", "360"])
+
+
+def test_recap_answer_is_not_always_the_first_chip():
+    """Always-first would teach the chip's position rather than the fact."""
+    slots = {
+        validate_recap(_recap(answer=a)).get("options").index(a)
+        for a in ("180", "ATP", "b")
+    }
+    assert len(slots) > 1
+
+
+def test_recap_option_order_is_stable_across_calls():
+    """Deterministic: the chips must not reshuffle between renders of the same quiz."""
+    assert validate_recap(_recap())["options"] == validate_recap(_recap())["options"]
+
+
+def test_recap_allows_a_blank_that_ends_the_sentence():
+    assert validate_recap(_recap(after=""))["sentence_after"] == ""
+    raw = _recap()
+    del raw["sentence_after"]
+    assert validate_recap(raw)["sentence_after"] == ""
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "not-an-object",
+        _recap(before=""),  # empty stem
+        _recap(answer=""),  # empty answer
+        _recap(answer=None),  # non-string answer
+        _recap(distractors=["90"]),  # too few
+        _recap(distractors=["90", "360", "45"]),  # too many
+        _recap(distractors=["90", "90"]),  # duplicate distractors
+        _recap(answer="180", distractors=["180", "90"]),  # distractor equals the answer
+        _recap(answer="180", distractors=["  180  ", "90"]),  # ...after trimming
+        _recap(distractors=["90", ""]),  # empty distractor
+        _recap(distractors="not-a-list"),
+    ],
+)
+def test_recap_rejects_malformed(bad):
+    with pytest.raises(GeneratorError):
+        validate_recap(bad)
+
+
+# --- validate_generation (questions are strict; the recap is not worth a quiz) ---
+
+
+def test_generation_returns_questions_and_recap():
+    out = validate_generation(_generation(), 5)
+    assert len(out["questions"]) == 5
+    assert out["recap"]["answer"] == "180"
+
+
+def test_a_botched_recap_does_not_cost_a_good_quiz():
+    out = validate_generation(_generation(recap={"sentence_before": ""}), 5)
+    assert len(out["questions"]) == 5
+    # ...it is silently replaced from the offline bank.
+    assert out["recap"]["answer"] in {r["answer"] for r in RECAP_BANK}
+
+
+def test_a_botched_question_set_is_still_rejected():
+    with pytest.raises(GeneratorError):
+        validate_generation(_generation(questions=[_q(correct_index=9)]), 1)
+
+
+def test_generation_rejects_a_non_object():
+    with pytest.raises(GeneratorError):
+        validate_generation(GOOD, 5)  # a bare list, not {questions, recap}
+
+
 # --- orchestration: retry once, then fall back ---------------------------------
 
 
@@ -106,15 +203,16 @@ class _FakeGen:
 
 def test_generation_retries_then_succeeds(app_context, monkeypatch):
     app_context.config["QUIZ_GEN_RETRIES"] = 1
-    bad = [_q(options=["a", "b"])]  # fails validation
-    fake = _FakeGen(bad, GOOD)
+    bad = _generation(questions=[_q(options=["a", "b"])])  # fails validation
+    fake = _FakeGen(bad, _generation())
     monkeypatch.setattr(generator, "get_generator", lambda: fake)
 
-    items = generate_quiz_questions(count=5, subjects=["Math"], grade_or_age="Age 10")
+    quiz = generate_quiz(count=5, subjects=["Math"], grade_or_age="Age 10")
 
     assert fake.calls == 2  # first failed, retry succeeded
-    assert len(items) == 5
-    assert items[0]["prompt"] == "Q0?"
+    assert len(quiz["questions"]) == 5
+    assert quiz["questions"][0]["prompt"] == "Q0?"
+    assert quiz["recap"]["answer"] == "180"
 
 
 def test_generation_falls_back_to_bank_after_two_failures(app_context, monkeypatch):
@@ -122,27 +220,37 @@ def test_generation_falls_back_to_bank_after_two_failures(app_context, monkeypat
     fake = _FakeGen(GeneratorError("boom"), GeneratorError("boom again"))
     monkeypatch.setattr(generator, "get_generator", lambda: fake)
 
-    items = generate_quiz_questions(count=5)
+    quiz = generate_quiz(count=5)
 
     assert fake.calls == 2  # 1 attempt + 1 retry, both failed
-    assert len(items) == 5
-    assert items[0]["prompt"] == QUESTION_BANK[0]["prompt"]  # served from offline bank
+    assert len(quiz["questions"]) == 5
+    # served from the offline bank, recap included
+    assert quiz["questions"][0]["prompt"] == QUESTION_BANK[0]["prompt"]
+    assert quiz["recap"]["answer"] in {r["answer"] for r in RECAP_BANK}
 
 
 def test_generation_falls_back_on_repeated_malformed_output(app_context, monkeypatch):
     app_context.config["QUIZ_GEN_RETRIES"] = 1
-    malformed = [_q(correct_index=9)]  # invalid twice
+    malformed = _generation(questions=[_q(correct_index=9)])  # invalid twice
     fake = _FakeGen(malformed, malformed)
     monkeypatch.setattr(generator, "get_generator", lambda: fake)
 
-    items = generate_quiz_questions(count=5)
-    assert items[0]["prompt"] == QUESTION_BANK[0]["prompt"]
+    quiz = generate_quiz(count=5)
+    assert quiz["questions"][0]["prompt"] == QUESTION_BANK[0]["prompt"]
 
 
 def test_no_api_key_uses_offline_bank_without_retrying(app_context):
     # conftest forces ANTHROPIC_API_KEY="" → get_generator() returns the Dummy gen.
-    items = generate_quiz_questions(count=5)
-    assert [q["prompt"] for q in items] == [q["prompt"] for q in QUESTION_BANK[:5]]
+    quiz = generate_quiz(count=5)
+    assert [q["prompt"] for q in quiz["questions"]] == [
+        q["prompt"] for q in QUESTION_BANK[:5]
+    ]
+    assert quiz["recap"]["answer"] in {r["answer"] for r in RECAP_BANK}
+
+
+def test_offline_recap_varies_with_quiz_length(app_context):
+    """A 5-question quiz and a 7-question debt quiz must not recap the same idea."""
+    assert generate_quiz(count=5)["recap"] != generate_quiz(count=7)["recap"]
 
 
 # --- Claude adapter (parsing / refusal), no network ----------------------------
@@ -184,12 +292,15 @@ def _claude_with(resp):
 
 
 def test_claude_generator_parses_structured_output(app_context):
-    gen = _claude_with(_Resp(json.dumps({"questions": GOOD})))
+    gen = _claude_with(_Resp(json.dumps(_generation())))
     raw = gen.generate(count=5, subjects=["Math"], grade_or_age="Age 10")
-    assert isinstance(raw, list) and len(raw) == 7
+    assert isinstance(raw, dict)
+    assert len(raw["questions"]) == 7
+    assert raw["recap"]["answer"] == "180"
     # a json_schema structured-output request was issued
     fmt = gen._client.messages.kwargs["output_config"]["format"]
     assert fmt["type"] == "json_schema"
+    assert "recap" in fmt["schema"]["properties"]
 
 
 def test_claude_generator_refusal_raises(app_context):
@@ -224,3 +335,9 @@ def test_prompts_ground_on_material_and_level():
 def test_prompts_use_subjects_when_no_material():
     _, user = _build_prompts(5, ["Math", "History"], None, None, "en")
     assert "Math" in user and "History" in user
+
+
+def test_prompts_ask_for_the_recap():
+    system, user = _build_prompts(5, ["Math"], None, None, "en")
+    assert "recap" in user.lower()
+    assert "sentence_before" in user and "distractors" in user

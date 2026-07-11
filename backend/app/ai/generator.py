@@ -5,16 +5,23 @@ age-appropriate MCQs from either a learner's profile (grade/age + focus subjects
 explicit study material, enforces a strict structural contract on the model's output,
 and guarantees the endpoint never crashes on malformed AI content.
 
+A generation is a **quiz plus its recap**: the multiple-choice questions, and one
+fill-in-the-blank sentence closing the same idea. Both come out of a single structured
+output call, so the recap is grounded in the material the questions came from rather
+than being a fixed sentence bolted on by the client.
+
 Design — a small pluggable interface with two implementations behind one factory:
 
   * ``ClaudeQuestionGenerator`` — calls the Anthropic API with a JSON-schema structured
-    output so the model returns a standardized questions array.
+    output so the model returns a standardized questions array plus a recap.
   * ``DummyQuestionGenerator`` — serves the curated offline bank (app/quiz_content.py).
     Used when no API key is configured AND as the resiliency fallback.
 
-Resiliency (the DoD): ``generate_quiz_questions`` runs the AI generator, validates the
-result, re-prompts once on a validation failure, and on a second failure falls back to
-the offline bank — so a client always receives a valid, structured quiz.
+Resiliency (the DoD): ``generate_quiz`` runs the AI generator, validates the result,
+re-prompts once on a validation failure, and on a second failure falls back to the
+offline bank — so a client always receives a valid, structured quiz. A *recap* that
+fails validation is quietly replaced from the offline bank instead of costing an
+otherwise perfectly good set of questions.
 """
 
 import json
@@ -23,7 +30,8 @@ from typing import Protocol
 
 from flask import current_app
 
-from app.quiz_content import build_questions
+from app.quiz_content import build_questions, build_recap
+from app.validation import VALID_SUBJECTS
 
 try:  # optional dependency — only needed when an API key is configured
     import anthropic
@@ -35,13 +43,21 @@ logger = logging.getLogger(__name__)
 # Every question is exactly one prompt + this many options + one correct index.
 OPTION_COUNT = 4
 
+# Case-insensitive canonicalization, so a model that answers "math" still lands in the
+# same mastery bucket as one that answers "Math".
+_SUBJECT_LOOKUP = {s.lower(): s for s in VALID_SUBJECTS}
+
 
 class GeneratorError(Exception):
     """A generator could not produce a valid quiz; the caller falls back."""
 
 
 class QuestionGenerator(Protocol):
-    """Produces raw question dicts: {prompt, options, correct_index, concept}."""
+    """Produces a raw generation: {questions: [...], recap: {...}}.
+
+    Each question is {prompt, options, correct_index, concept, subject}; the recap is
+    {sentence_before, sentence_after, answer, distractors}.
+    """
 
     def generate(
         self,
@@ -51,7 +67,7 @@ class QuestionGenerator(Protocol):
         grade_or_age: str | None = None,
         material_text: str | None = None,
         locale: str = "en",
-    ) -> list[dict]: ...
+    ) -> dict: ...
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +93,22 @@ def _clean_options(options) -> list[str]:
     return cleaned
 
 
+def _clean_subject(value) -> str | None:
+    """Canonicalize a generated subject, or None if it isn't one we track.
+
+    Deliberately lenient: an unrecognised subject costs one row of mastery data, while
+    raising here would throw away an otherwise perfectly good quiz.
+    """
+    if not isinstance(value, str):
+        return None
+    return _SUBJECT_LOOKUP.get(value.strip().lower())
+
+
 def validate_questions(raw, count: int) -> list[dict]:
     """Enforce the contract and normalize to internal quiz items.
 
     Returns exactly ``count`` items shaped
-    ``{id, prompt, options[4], correct_index, concept}`` (ids q1..qN).
+    ``{id, prompt, options[4], correct_index, concept, subject}`` (ids q1..qN).
     Raises :class:`GeneratorError` on any violation.
     """
     if not isinstance(raw, list):
@@ -123,9 +150,90 @@ def validate_questions(raw, count: int) -> list[dict]:
                 "options": options,
                 "correct_index": correct_index,
                 "concept": concept,
+                "subject": _clean_subject(question.get("subject")),
             }
         )
     return items
+
+
+#: Chips shown on the recap screen: the answer plus this many distractors.
+RECAP_OPTION_COUNT = 3
+
+
+def validate_recap(raw) -> dict:
+    """Enforce the recap contract and normalize to `{sentence_before, sentence_after,
+    answer, options}`.
+
+    Raises :class:`GeneratorError` on any violation.
+    """
+    if not isinstance(raw, dict):
+        raise GeneratorError("recap must be an object")
+
+    before = raw.get("sentence_before")
+    if not isinstance(before, str) or not before.strip():
+        raise GeneratorError("recap sentence_before must be a non-empty string")
+
+    # The blank may end the sentence, so a trailing clause is optional.
+    after = raw.get("sentence_after")
+    after = after.strip() if isinstance(after, str) else ""
+
+    answer = raw.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise GeneratorError("recap answer must be a non-empty string")
+    answer = answer.strip()
+
+    distractors = raw.get("distractors")
+    wanted = RECAP_OPTION_COUNT - 1
+    if not isinstance(distractors, list) or len(distractors) != wanted:
+        raise GeneratorError(f"recap needs exactly {wanted} distractors")
+
+    cleaned: list[str] = []
+    seen = {answer.lower()}
+    for distractor in distractors:
+        if not isinstance(distractor, str) or not distractor.strip():
+            raise GeneratorError("recap distractors must be non-empty strings")
+        text = distractor.strip()
+        if text.lower() in seen:
+            raise GeneratorError(
+                "recap distractors must differ from the answer and each other"
+            )
+        seen.add(text.lower())
+        cleaned.append(text)
+
+    # A deterministic but non-obvious slot for the answer. Always-first would teach the
+    # chip's position rather than the fact; shuffling would make the output untestable
+    # and would change on every re-render if the client ever re-sorted.
+    slot = sum(map(ord, answer)) % RECAP_OPTION_COUNT
+    options = cleaned[:]
+    options.insert(slot, answer)
+
+    return {
+        "sentence_before": before.strip(),
+        "sentence_after": after,
+        "answer": answer,
+        "options": options,
+    }
+
+
+def validate_generation(raw, count: int) -> dict:
+    """Validate a whole generation into `{questions, recap}`.
+
+    Questions are strict: a malformed set is rejected so the caller can retry or fall
+    back. The recap is not worth a quiz — if the model botched it, we serve the offline
+    one and keep the questions it got right.
+    """
+    if not isinstance(raw, dict):
+        raise GeneratorError("generation must be an object with a 'questions' array")
+
+    questions = validate_questions(raw.get("questions"), count)
+
+    try:
+        recap = validate_recap(raw.get("recap"))
+    except GeneratorError as exc:
+        logger.warning("recap rejected (%s); serving the offline recap", exc)
+        recap = validate_recap(build_recap(count))
+
+    return {"questions": questions, "recap": recap}
 
 
 # ---------------------------------------------------------------------------
@@ -148,16 +256,20 @@ class DummyQuestionGenerator:
         grade_or_age: str | None = None,
         material_text: str | None = None,
         locale: str = "en",
-    ) -> list[dict]:
-        return [
-            {
-                "prompt": q["prompt"],
-                "options": q["options"],
-                "correct_index": q["correct_index"],
-                "concept": q["concept"],
-            }
-            for q in build_questions(count)
-        ]
+    ) -> dict:
+        return {
+            "questions": [
+                {
+                    "prompt": q["prompt"],
+                    "options": q["options"],
+                    "correct_index": q["correct_index"],
+                    "concept": q["concept"],
+                    "subject": q["subject"],
+                }
+                for q in build_questions(count)
+            ],
+            "recap": build_recap(count),
+        }
 
 
 _SCHEMA = {
@@ -172,13 +284,33 @@ _SCHEMA = {
                     "options": {"type": "array", "items": {"type": "string"}},
                     "correct_index": {"type": "integer"},
                     "concept": {"type": "string"},
+                    # An enum, not a free string: mastery is only comparable across
+                    # quizzes if every generator names the subject the same way.
+                    "subject": {"type": "string", "enum": list(VALID_SUBJECTS)},
                 },
-                "required": ["prompt", "options", "correct_index", "concept"],
+                "required": [
+                    "prompt",
+                    "options",
+                    "correct_index",
+                    "concept",
+                    "subject",
+                ],
                 "additionalProperties": False,
             },
-        }
+        },
+        "recap": {
+            "type": "object",
+            "properties": {
+                "sentence_before": {"type": "string"},
+                "sentence_after": {"type": "string"},
+                "answer": {"type": "string"},
+                "distractors": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["sentence_before", "sentence_after", "answer", "distractors"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["questions"],
+    "required": ["questions", "recap"],
     "additionalProperties": False,
 }
 
@@ -196,7 +328,8 @@ def _build_prompts(
         f"exactly {OPTION_COUNT} distinct, plausible answer options and exactly one "
         "correct option. For each question also give a one-sentence 'concept' "
         "explaining why the correct answer is right (shown to a child who answered "
-        "wrong). Return only the requested structured data."
+        "wrong), and a 'subject' naming which school subject it belongs to. Return "
+        "only the requested structured data."
     )
 
     parts = [f"Generate exactly {count} multiple-choice questions."]
@@ -220,8 +353,18 @@ def _build_prompts(
         parts.append(f"Write the questions and options in locale '{locale}'.")
     parts.append(
         f"Each item: a 'prompt', an 'options' array of exactly {OPTION_COUNT} distinct "
-        "strings, a 'correct_index' pointing to the single correct option, and a "
-        "one-sentence 'concept'."
+        "strings, a 'correct_index' pointing to the single correct option, a "
+        "one-sentence 'concept', and a 'subject' — exactly one of: "
+        + ", ".join(VALID_SUBJECTS)
+        + ". Pick the closest subject even when the question straddles two."
+    )
+    parts.append(
+        "Also write one 'recap': a fill-in-the-blank sentence closing the single most "
+        "important idea the quiz covered. Split it at the blank into 'sentence_before' "
+        "and 'sentence_after' (use an empty 'sentence_after' if the blank ends the "
+        "sentence), give the word or number that fills it as 'answer', and give "
+        f"{RECAP_OPTION_COUNT - 1} plausible but wrong 'distractors'. The answer must "
+        "be short — a single word or number, not a clause."
     )
     return system, "\n\n".join(parts)
 
@@ -243,7 +386,7 @@ class ClaudeQuestionGenerator:
         grade_or_age: str | None = None,
         material_text: str | None = None,
         locale: str = "en",
-    ) -> list[dict]:
+    ) -> dict:
         system, user = _build_prompts(
             count, subjects, grade_or_age, material_text, locale
         )
@@ -269,10 +412,9 @@ class ClaudeQuestionGenerator:
         except json.JSONDecodeError as exc:  # truncated or malformed output
             raise GeneratorError(f"Claude returned invalid JSON: {exc}") from exc
 
-        questions = data.get("questions") if isinstance(data, dict) else None
-        if not isinstance(questions, list):
+        if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
             raise GeneratorError("Claude response missing a 'questions' array")
-        return questions
+        return data
 
 
 def get_generator() -> QuestionGenerator:
@@ -283,15 +425,15 @@ def get_generator() -> QuestionGenerator:
     return DummyQuestionGenerator()
 
 
-def generate_quiz_questions(
+def generate_quiz(
     *,
     count: int,
     subjects: list[str] | None = None,
     grade_or_age: str | None = None,
     material_text: str | None = None,
     locale: str = "en",
-) -> list[dict]:
-    """Produce exactly ``count`` validated quiz items.
+) -> dict:
+    """Produce a validated `{questions, recap}` with exactly ``count`` questions.
 
     Runs the active generator, validates the output, re-prompts once on a validation
     failure (``QUIZ_GEN_RETRIES``), then falls back to the offline bank — so callers
@@ -301,7 +443,7 @@ def generate_quiz_questions(
 
     if isinstance(generator, DummyQuestionGenerator):
         # No AI configured; the bank is valid by construction — no retry needed.
-        return validate_questions(generator.generate(count=count), count)
+        return validate_generation(generator.generate(count=count), count)
 
     attempts = 1 + max(0, current_app.config.get("QUIZ_GEN_RETRIES", 1))
     last_error: GeneratorError | None = None
@@ -314,7 +456,7 @@ def generate_quiz_questions(
                 material_text=material_text,
                 locale=locale,
             )
-            return validate_questions(raw, count)
+            return validate_generation(raw, count)
         except GeneratorError as exc:
             last_error = exc
             logger.warning(
@@ -324,4 +466,4 @@ def generate_quiz_questions(
     logger.warning(
         "AI generation exhausted (%s); serving offline fallback bank", last_error
     )
-    return validate_questions(DummyQuestionGenerator().generate(count=count), count)
+    return validate_generation(DummyQuestionGenerator().generate(count=count), count)

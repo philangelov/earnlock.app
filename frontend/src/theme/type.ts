@@ -22,6 +22,14 @@ export const Type = {
     fontVariant: ['tabular-nums'],
     ...w('700'),
   },
+  /** The countdown inside the Today dial — sized to breathe within the ring. */
+  dial: {
+    fontSize: 52,
+    lineHeight: 56,
+    letterSpacing: -1.2,
+    fontVariant: ['tabular-nums'],
+    ...w('700'),
+  },
   /** Medium hero numeral (stat headline values). */
   numberLg: {
     fontSize: 30,

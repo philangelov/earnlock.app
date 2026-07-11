@@ -44,6 +44,18 @@ def test_generate_defaults_to_profile_source(client, auth_headers, gen_stubs):
     assert all("correct_index" in q for q in gen_stubs["created_questions"])
 
 
+def test_generate_ships_a_recap_with_its_answer(client, auth_headers, gen_stubs):
+    """The recap is a review exercise, not a graded one — /quiz/submit has already paid
+    out by the time it renders — so unlike the questions it carries its own answer."""
+    body = client.post("/quiz/generate", headers=auth_headers).get_json()
+    recap = body["recap"]
+
+    assert recap["sentence_before"]
+    assert recap["answer"] in recap["options"]
+    assert len(recap["options"]) == 3
+    assert len(set(recap["options"])) == 3
+
+
 def test_generate_rejects_unknown_source(client, auth_headers, gen_stubs):
     resp = client.post(
         "/quiz/generate", headers=auth_headers, json={"source": "banana"}

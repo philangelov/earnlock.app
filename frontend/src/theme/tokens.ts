@@ -54,6 +54,25 @@ export const LightTokens = {
   dangerSoft: '#ffe8e6',
   onDanger: '#ffffff',
 
+  /**
+   * Icon-well fills, Settings-style: a saturated rounded square with a white glyph.
+   *
+   * These are the ONE place other hues are allowed, and they are decoration, not meaning:
+   * the colour identifies a row at a glance, it never encodes state. State is still said
+   * with `accent` (earned/active) and `danger` (destructive), which is why `iconRed`
+   * matches `danger` exactly rather than being a fourth shade of red. Values are Apple's
+   * system colors so they sit correctly beside real iOS chrome.
+   */
+  iconBlue: '#007aff',
+  iconIndigo: '#5856d6',
+  iconPurple: '#af52de',
+  iconOrange: '#ff9500',
+  iconTeal: '#30b0c7',
+  iconRed: '#ff3b30',
+  iconGray: '#8e8e93',
+  /** Glyph drawn on any `icon*` fill. */
+  onIcon: '#ffffff',
+
   /** Dimmed overlay behind modals and locked-app tiles (same in both themes). */
   scrim: 'rgba(10,10,16,0.5)',
 } as const;
@@ -84,6 +103,17 @@ export const DarkTokens: Tokens = {
   danger: '#ff453a',
   dangerSoft: 'rgba(255,69,58,0.16)',
   onDanger: '#ffffff',
+
+  // Apple's dark-mode system colors: brighter and slightly desaturated so they don't
+  // vibrate against black.
+  iconBlue: '#0a84ff',
+  iconIndigo: '#5e5ce6',
+  iconPurple: '#bf5af2',
+  iconOrange: '#ff9f0a',
+  iconTeal: '#40c8e0',
+  iconRed: '#ff453a',
+  iconGray: '#8e8e93',
+  onIcon: '#ffffff',
 
   scrim: 'rgba(0,0,0,0.6)',
 };

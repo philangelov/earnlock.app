@@ -99,11 +99,46 @@ def update_profile_subjects(user_id, focus_subjects):
     )
 
 
-def get_screentime_balance(user_id):
-    """Return {remaining_seconds, updated_at}, or None if no wallet row exists yet."""
+def get_screentime_window(user_id):
+    """Return {unlocked_until, updated_at}, or None if no window row exists yet.
+
+    `unlocked_until` is the instant the shield returns. Remaining seconds are derived
+    from it by the caller — the wallet stores a deadline, not a countdown (0015).
+    """
     rows, _ = _rest_request(
         "GET",
         "screentime_balance",
-        params={"user_id": f"eq.{user_id}", "select": "remaining_seconds,updated_at"},
+        params={"user_id": f"eq.{user_id}", "select": "unlocked_until,updated_at"},
     )
     return rows[0] if rows else None
+
+
+def delete_auth_user(user_id):
+    """Hard-delete the Supabase Auth user.
+
+    Everything else follows: `public.users.id` references `auth.users(id) on delete
+    cascade`, and every other table cascades from `public.users`. There is no
+    soft-delete and no orphan to sweep up later.
+
+    This is the Auth admin API, not PostgREST, so it skips `_rest_request`.
+    """
+    base = current_app.config["SUPABASE_URL"]
+    key = current_app.config["SUPABASE_SERVICE_ROLE_KEY"]
+    url = f"{base}/auth/v1/admin/users/{urllib.parse.quote(str(user_id))}"
+
+    req = urllib.request.Request(
+        url,
+        headers={"apikey": key, "Authorization": f"Bearer {key}"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_UPSTREAM_TIMEOUT_SECONDS) as res:
+            return res.status
+    except urllib.error.HTTPError as e:
+        # A user who is already gone is the outcome the caller asked for.
+        if e.code == 404:
+            return 404
+        detail = e.read().decode(errors="replace")
+        raise SupabaseError(f"Auth admin DELETE user failed ({e.code}): {detail}")
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise SupabaseError(f"Auth admin DELETE user connection failed: {e}")

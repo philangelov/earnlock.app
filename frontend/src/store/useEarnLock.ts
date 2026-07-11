@@ -2,9 +2,14 @@
  * EarnLock store — app state + the real loop logic, backed by the Flask API
  * (docs/api-contract.md). Navigation is handled by expo-router in the screens; this
  * store owns the data and the state transitions. Durable progress (onboarding, grade,
- * subjects, blacklist, coins, streak, unlock deadline, SOS/debt) is persisted to
- * AsyncStorage; transient quiz-session state is not. The JWT itself lives in
- * expo-secure-store (see lib/api.ts), never here.
+ * subjects, unlock deadline, SOS/debt) is persisted to AsyncStorage; transient
+ * quiz-session state is not. The JWT itself lives in expo-secure-store (see
+ * lib/api.ts), never here.
+ *
+ * Achievement figures — streak, accuracy, minutes earned, subject mastery — are NOT
+ * here. They are derived server-side from the real quiz history and read through
+ * `store/stats.ts`. Keeping them out of a client-persisted store is what stops the app
+ * from reporting a streak nothing has verified.
  *
  * SOS has no backend endpoint yet (no /sos route exists) and Wake-Up Lock has no
  * frontend screen yet, so `activateSos` stays local-only/presentational — everything
@@ -42,6 +47,8 @@ export type EarnLockState = {
   name: string;
   /** Which identity provider saved the progress, if any. No email, no password. */
   account: AccountProvider | null;
+  /** file:// URI of the chosen profile picture, copied into the app's documents dir. */
+  avatarUri: string | null;
   /** True while a session exists. Hydrated from SecureStore at launch, not persisted here. */
   authed: boolean;
   authLoading: boolean;
@@ -66,6 +73,8 @@ export type EarnLockState = {
   /** Real quiz fetched from POST /quiz/generate; null until beginQuiz() resolves. */
   quizId: string | null;
   quizQuestions: api.QuizQuestion[];
+  /** The closing exercise, authored server-side from the same material. */
+  quizRecap: api.QuizRecap | null;
   quizAnswers: Record<string, number>;
   quizResults: api.QuizResult[] | null;
   quizLoading: boolean;
@@ -77,17 +86,18 @@ export type EarnLockState = {
   recapChecked: boolean;
   /** Epoch ms until which apps are unlocked; 0 (or past) = locked. */
   unlockUntil: number;
-  streak: number;
-  coins: number;
   sosUsed: boolean;
   debt: boolean;
 
   // onboarding
   setName: (name: string) => void;
   setAccount: (provider: AccountProvider | null) => void;
+  setAvatarUri: (uri: string | null) => void;
   /** Native Apple/Google sign-in. Resolves false on cancel or failure. */
   signIn: (provider: AccountProvider) => Promise<boolean>;
   logoutAccount: () => Promise<void>;
+  /** Irreversibly delete the account server-side, then wipe this device. */
+  deleteAccount: () => Promise<boolean>;
   /** Read the stored session at launch so screens know whether the API is usable. */
   hydrateAuth: () => Promise<void>;
   setAge: (age: number) => void;
@@ -121,15 +131,13 @@ export type EarnLockState = {
   // rewards / hooks
   claim: () => void;
   activateSos: () => void;
-
-  // demo utilities
-  resetAll: () => void;
 };
 
 const initial = {
   onboarded: false,
   name: '',
   account: null as AccountProvider | null,
+  avatarUri: null as string | null,
   authed: false,
   authLoading: false,
   authError: null as string | null,
@@ -159,6 +167,7 @@ const initial = {
   uploadName: '',
   quizId: null as string | null,
   quizQuestions: [] as api.QuizQuestion[],
+  quizRecap: null as api.QuizRecap | null,
   quizAnswers: {} as Record<string, number>,
   quizResults: null as api.QuizResult[] | null,
   quizLoading: false,
@@ -169,8 +178,6 @@ const initial = {
   recapPick: null as string | null,
   recapChecked: false,
   unlockUntil: 0,
-  streak: 4,
-  coins: 220,
   sosUsed: false,
   debt: false,
 };
@@ -182,6 +189,7 @@ export const useEarnLock = create<EarnLockState>()(
 
       setName: (name) => set({ name }),
       setAccount: (account) => set({ account }),
+      setAvatarUri: (avatarUri) => set({ avatarUri }),
 
       signIn: async (provider) => {
         set({ authLoading: true, authError: null });
@@ -228,7 +236,23 @@ export const useEarnLock = create<EarnLockState>()(
       },
       logoutAccount: async () => {
         await api.signOut();
-        set({ account: null, authed: false });
+        // Signing out leaves the account intact on the server but takes it off this
+        // device entirely — grade, subjects, avatar and the unlock clock included. The
+        // next person to open the app must not inherit the last one's answers, and a
+        // signed-out device must not keep an open unlock window.
+        set({ ...initial });
+      },
+      deleteAccount: async () => {
+        if (!get().authed) return false;
+        try {
+          await api.deleteAccount();
+        } catch {
+          // The rows may or may not be gone; either way, do not wipe the device on a
+          // failure the user could retry.
+          return false;
+        }
+        set({ ...initial });
+        return true;
       },
       hydrateAuth: async () => {
         set({ authed: await api.isAuthenticated() });
@@ -298,6 +322,7 @@ export const useEarnLock = create<EarnLockState>()(
           set({
             quizId: quiz.quiz_id,
             quizQuestions: quiz.questions,
+            quizRecap: quiz.recap,
             quizAnswers: {},
             qIndex: 0,
             selected: null,
@@ -344,7 +369,6 @@ export const useEarnLock = create<EarnLockState>()(
             quizLoading: false,
             // The balance is server-authoritative from here — replace, don't stack.
             unlockUntil: Date.now() + res.new_balance_seconds * 1000,
-            coins: s.coins + Math.round(res.earned_seconds / 60),
             debt: res.sos_debt_cleared ? false : s.debt,
             sosUsed: res.sos_debt_cleared ? false : s.sosUsed,
           }));
@@ -359,6 +383,7 @@ export const useEarnLock = create<EarnLockState>()(
         set({
           quizId: null,
           quizQuestions: [],
+          quizRecap: null,
           quizAnswers: {},
           quizResults: null,
           quizError: null,
@@ -367,6 +392,15 @@ export const useEarnLock = create<EarnLockState>()(
           recapPick: null,
           recapChecked: false,
         }),
+      /**
+       * Resync the unlock clock from the server's window.
+       *
+       * `remaining_seconds` is derived server-side from `unlocked_until - now()`, so it
+       * only ever counts down. Turning it back into a local deadline is therefore safe:
+       * re-reading it cannot extend the window, which is exactly what the old wallet did
+       * on every launch. The device's own clock is used only to render the countdown, not
+       * to decide how much time is left.
+       */
       fetchBalance: async () => {
         if (!get().authed) return;
         try {
@@ -376,8 +410,8 @@ export const useEarnLock = create<EarnLockState>()(
               balance.remaining_seconds > 0 ? Date.now() + balance.remaining_seconds * 1000 : 0,
           });
         } catch {
-          // Best-effort sync — the locally-held unlockUntil (from the last submit) stays
-          // authoritative-enough for the UI if the balance can't be fetched right now.
+          // Best-effort sync — the locally-held unlockUntil is an absolute instant, so it
+          // stays honest (it can only run down) until the next successful fetch.
         }
       },
       pickRecap: (word) => set((s) => (s.recapChecked ? {} : { recapPick: word })),
@@ -395,12 +429,6 @@ export const useEarnLock = create<EarnLockState>()(
           // Stack on top of any time already earned rather than truncating it.
           unlockUntil: Math.max(Date.now(), s.unlockUntil) + SOS_MS,
         })),
-
-      // Wipe progress back to a fresh first-run state, including the stored session.
-      resetAll: async () => {
-        await api.signOut();
-        set({ ...initial });
-      },
     }),
     {
       name: 'earnlock-store',
@@ -410,6 +438,7 @@ export const useEarnLock = create<EarnLockState>()(
         onboarded: s.onboarded,
         name: s.name,
         account: s.account,
+        avatarUri: s.avatarUri,
         age: s.age,
         hoursPerDay: s.hoursPerDay,
         hoursEstimated: s.hoursEstimated,
@@ -424,8 +453,6 @@ export const useEarnLock = create<EarnLockState>()(
         imported: s.imported,
         uploadName: s.uploadName,
         unlockUntil: s.unlockUntil,
-        streak: s.streak,
-        coins: s.coins,
         sosUsed: s.sosUsed,
         debt: s.debt,
       }),

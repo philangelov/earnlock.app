@@ -1,12 +1,12 @@
 import { useRouter } from 'expo-router';
+import { useEffect } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 
+import { Appear } from '@/components/Appear';
 import { Button } from '@/components/Button';
 import { Screen } from '@/components/Screen';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
-import { QUIZ_QUESTIONS, RECAP } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -16,15 +16,26 @@ export default function RecapScreen() {
   const t = useTokens();
   const router = useRouter();
 
+  const recap = useEarnLock((s) => s.quizRecap);
+  const questionCount = useEarnLock((s) => s.quizQuestions.length);
+  const hasResults = useEarnLock((s) => s.quizResults != null);
   const recapPick = useEarnLock((s) => s.recapPick);
   const recapChecked = useEarnLock((s) => s.recapChecked);
   const pickRecap = useEarnLock((s) => s.pickRecap);
   const checkRecap = useEarnLock((s) => s.checkRecap);
   const retryRecap = useEarnLock((s) => s.retryRecap);
 
-  const correct = recapPick === RECAP.answer;
+  // The recap belongs to a quiz session. Landing here without one (a deep link, a reload
+  // after the session was reset) means there is nothing to recap — go where the user
+  // actually is: the reward if they earned one, otherwise Today.
+  useEffect(() => {
+    if (!recap) router.replace(hasResults ? '/earned' : '/today');
+  }, [recap, hasResults, router]);
+
+  const correct = recap != null && recapPick === recap.answer;
   // Derived from flow state: all MC done, plus this final step once it's answered correctly.
-  const progress = (QUIZ_QUESTIONS + (recapChecked && correct ? 1 : 0)) / (QUIZ_QUESTIONS + 1);
+  const total = questionCount || 1;
+  const progress = (total + (recapChecked && correct ? 1 : 0)) / (total + 1);
 
   const blankStyle = (): ViewStyle => {
     if (recapChecked) {
@@ -42,10 +53,13 @@ export default function RecapScreen() {
         ? { borderColor: t.accent, backgroundColor: t.accentSoft }
         : { borderColor: t.separator, backgroundColor: t.surface };
     }
-    if (w === RECAP.answer) return { borderColor: t.accent, backgroundColor: t.accentSoft };
+    if (w === recap?.answer) return { borderColor: t.accent, backgroundColor: t.accentSoft };
     if (recapPick === w) return { borderColor: t.danger, backgroundColor: t.dangerSoft };
     return { borderColor: t.separator, backgroundColor: t.surface, opacity: 0.5 };
   };
+
+  // The redirect above is already in flight; render nothing rather than a broken sentence.
+  if (!recap) return null;
 
   const onButton = () => {
     if (recapChecked) {
@@ -104,17 +118,24 @@ export default function RecapScreen() {
         <Text style={[Type.title1, { color: t.text, marginTop: Space.sm }]}>Fill in the blank</Text>
 
         <View style={styles.sentence}>
-          <Text style={[Type.title3, styles.sentenceText, { color: t.text2 }]}>{RECAP.pre} </Text>
+          <Text style={[Type.title3, styles.sentenceText, { color: t.text2 }]}>
+            {recap.sentence_before}{' '}
+          </Text>
           <View style={[styles.blank, blankStyle()]}>
             <Text style={[Type.title3, { color: recapChecked && !correct ? t.danger : t.text }]}>
               {recapPick || '?'}
             </Text>
           </View>
-          <Text style={[Type.title3, styles.sentenceText, { color: t.text2 }]}> {RECAP.post}</Text>
+          {recap.sentence_after !== '' && (
+            <Text style={[Type.title3, styles.sentenceText, { color: t.text2 }]}>
+              {' '}
+              {recap.sentence_after}
+            </Text>
+          )}
         </View>
 
         <View style={styles.chips}>
-          {RECAP.options.map((w) => (
+          {recap.options.map((w) => (
             <Pressable
               key={w}
               accessibilityRole="button"
@@ -137,8 +158,9 @@ export default function RecapScreen() {
 
       <View style={styles.footer}>
         {recapChecked && (
-          <Animated.View
-            entering={FadeInDown.duration(200)}
+          <Appear
+            from={-8}
+            duration={200}
             accessibilityLiveRegion="polite"
             style={[styles.fb, { backgroundColor: correct ? t.accentSoft : t.dangerSoft }]}
           >
@@ -150,9 +172,9 @@ export default function RecapScreen() {
             <Text
               style={[Type.subheadStrong, { color: correct ? t.accentText : t.danger, flex: 1 }]}
             >
-              {correct ? 'Correct — it’s 180°!' : 'Not quite — give it another go.'}
+              {correct ? `Correct — it’s ${recap.answer}!` : 'Not quite — give it another go.'}
             </Text>
-          </Animated.View>
+          </Appear>
         )}
         <Button
           label={recapChecked ? (correct ? 'Claim your reward' : 'Try again') : 'Check answer'}

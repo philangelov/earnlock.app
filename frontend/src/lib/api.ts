@@ -112,7 +112,7 @@ async function clearSession(): Promise<void> {
 /* ------------------------------------------------------------------- transport */
 
 type RequestOptions = {
-  method?: 'GET' | 'POST' | 'PUT';
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   /** Attach the stored access token. Only the /auth routes skip this. */
   auth?: boolean;
@@ -258,12 +258,36 @@ export function updateProfile(fields: {
 
 /* ------------------------------------------------------------------------ quiz */
 
-export type QuizQuestion = { id: string; prompt: string; options: string[] };
+export type QuizQuestion = {
+  id: string;
+  prompt: string;
+  options: string[];
+  /** School subject the question belongs to; null when the generator didn't label it. */
+  subject: string | null;
+};
+/**
+ * The closing fill-in-the-blank, authored by the server from the same material the
+ * questions came from.
+ *
+ * Unlike a question, it ships with its `answer`. That is safe: the recap is a review
+ * exercise, not a graded one — `POST /quiz/submit` has already computed and credited the
+ * reward by the time the recap screen renders, so nothing is mintable by reading it.
+ */
+export type QuizRecap = {
+  sentence_before: string;
+  /** Empty when the blank ends the sentence. */
+  sentence_after: string;
+  /** Three chips, one of which is `answer`. */
+  options: string[];
+  answer: string;
+};
+
 export type GeneratedQuiz = {
   quiz_id: string;
   source: string;
   question_count: number;
   questions: QuizQuestion[];
+  recap: QuizRecap;
   generated_at: string;
 };
 
@@ -299,10 +323,94 @@ export function submitQuiz(quizId: string, answers: QuizAnswer[]): Promise<QuizS
 
 /* ------------------------------------------------------------ screentime balance */
 
-export type Balance = { remaining_seconds: number; updated_at: string | null };
+export type Balance = {
+  /** Seconds left on the window, computed against the SERVER's clock. Never negative. */
+  remaining_seconds: number;
+  /** The instant the shield returns. `null` before any time has ever been earned. */
+  unlocked_until: string | null;
+  updated_at: string | null;
+};
 
+/**
+ * The wallet is a deadline, not a countdown: earning extends `unlocked_until` and
+ * wall-clock time consumes it. Reading it can never re-grant it — which is the bug this
+ * shape exists to make impossible.
+ */
 export function getBalance(): Promise<Balance> {
   return request<Balance>('/screentime/balance');
+}
+
+/* --------------------------------------------------------------------- account */
+
+/**
+ * Hard-delete the signed-in account. Cascades through every table; there is no undo and
+ * no tombstone. The caller must clear its own session afterwards.
+ */
+export async function deleteAccount(): Promise<void> {
+  await request<null>('/account', { method: 'DELETE' });
+  await clearSession();
+}
+
+/* ----------------------------------------------------------------------- stats */
+
+export type StatsTotals = {
+  quizzes: number;
+  questions_answered: number;
+  questions_correct: number;
+  /** null — not 0 — when nothing has been answered. "No data" ≠ "got everything wrong". */
+  accuracy: number | null;
+  earned_seconds: number;
+  spent_seconds: number;
+  remaining_seconds: number;
+};
+
+export type StatsStreak = { current: number; best: number; active_today: boolean };
+
+/** One local calendar day. The series is always exactly 7 entries, oldest first. */
+export type StatsDay = {
+  date: string;
+  quizzes: number;
+  correct: number;
+  total: number;
+  earned_seconds: number;
+};
+
+export type StatsSubject = {
+  subject: string;
+  correct: number;
+  total: number;
+  accuracy: number | null;
+};
+
+/** One completed quiz. `total_count` is null for attempts recorded before the
+ *  server started storing the denominator (migration 0014). */
+export type QuizAttempt = {
+  quiz_id: string;
+  correct_count: number;
+  total_count: number | null;
+  earned_seconds: number;
+  created_at: string;
+};
+
+export type Stats = {
+  totals: StatsTotals;
+  streak: StatsStreak;
+  daily: StatsDay[];
+  subjects: StatsSubject[];
+  /** Newest first, up to the 30 most recent attempts. */
+  recent: QuizAttempt[];
+};
+
+/**
+ * Every number the Insights tab and the Learn roadmap display.
+ *
+ * The device's UTC offset rides along because a streak is a local-calendar notion: a
+ * quiz finished at 23:30 in Sofia belongs to that day, not to the next one as UTC
+ * would have it. `getTimezoneOffset()` is minutes *behind* UTC, so it is negated.
+ */
+export function getStats(): Promise<Stats> {
+  const tzOffset = -new Date().getTimezoneOffset();
+  return request<Stats>(`/stats?tz_offset=${tzOffset}`);
 }
 
 /* -------------------------------------------------------------- knowledge import */

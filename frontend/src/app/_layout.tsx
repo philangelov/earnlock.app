@@ -27,14 +27,22 @@ function RootNavigator() {
   // Re-read Screen Time on launch and whenever the app returns to the foreground, so status +
   // selection count stay fresh after the system authorization sheet, the app picker, or changes
   // made in iOS Settings.
+  //
+  // The unlock clock is resynced at the same moment. The window is a server-side deadline, so
+  // an hour spent in the background is an hour spent — the countdown must come back reading
+  // what the server says, not what the JS timer last managed to tick to before it was frozen.
   const refreshScreenTime = useScreenTime((s) => s.refresh);
+  const fetchBalance = useEarnLock((s) => s.fetchBalance);
   useEffect(() => {
     refreshScreenTime();
+    void fetchBalance();
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') refreshScreenTime();
+      if (state !== 'active') return;
+      refreshScreenTime();
+      void fetchBalance();
     });
     return () => sub.remove();
-  }, [refreshScreenTime]);
+  }, [refreshScreenTime, fetchBalance]);
 
   // The session lives in SecureStore, not in the persisted store, so read it once at launch.
   // Screens gate on `authed` rather than firing requests that can only come back 401.

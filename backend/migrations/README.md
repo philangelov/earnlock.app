@@ -31,6 +31,22 @@ Apply strictly in ascending order — later files depend on earlier ones.
 | 0010 | `0010_submit_quiz_reward.sql` | `submit_quiz_reward()` — atomic idempotent scoring: balance credit + history append + debt clear. |
 | 0011 | `0011_hardening_and_email_sync.sql` | Email-change sync trigger on `auth.users`, `anon` grant revokes, `search_path=''` + input validation on `submit_quiz_reward()`, redundant index cleanup. |
 | 0012 | `0012_revoke_truncate_from_clients.sql` | Revoke `TRUNCATE`/`REFERENCES`/`TRIGGER` from `authenticated` (TRUNCATE bypasses RLS) — clients now retain only owner-scoped `SELECT`. |
+| 0013 | `0013_oauth_only_auth.sql` | Drop `NOT NULL` from `users.email` (Sign in with Apple may withhold it). |
+| 0014 | `0014_stats_and_subject_mastery.sql` | `quiz_history.total_count` (+ backfill), `subject_stats` table + RLS, `submit_quiz_reward()` widened to record both, and `user_stats()` — one read returning totals, streak, a 7-day series, subject mastery and recent attempts. |
+| 0015 | `0015_screentime_window.sql` | **`screentime_balance` becomes a deadline, not a duration**: `unlocked_until timestamptz` replaces `remaining_seconds` (dropped, backfilled as `updated_at + remaining_seconds`). `submit_quiz_reward()` extends the window; `user_stats()` derives remaining from it. |
+
+> **0014 replaces `submit_quiz_reward`'s 5-argument signature** with a 7-argument one
+> (`p_total_count`, `p_subject_stats` added) and **drops the old function**. The backend is
+> its only caller, so deploy `backend/` and this migration together.
+>
+> **0015 drops `screentime_balance.remaining_seconds`.** That column only ever went up:
+> `/quiz/submit` credited it and nothing debited it, so the client's
+> `unlockUntil = now + remaining_seconds` re-granted the whole balance on every launch —
+> unlimited screen time, and a countdown that reset itself. The replacement stores the
+> instant the shield returns; remaining seconds are derived on read. `handle_new_user()`
+> still provisions with `(user_id)` alone, so the `default now()` gives a new account a
+> zero window (locked). Deploy `backend/` with it: `supabase.get_screentime_window()` and
+> `GET /screentime/balance` both changed shape.
 
 ## Schema overview
 
@@ -40,10 +56,11 @@ auth.users (Supabase-managed)
    │  on email change → handle_user_email_change() keeps users.email in sync (0011)
    ├──1:1──> users                 email, grade_or_age
    │            ├──1:1──> profiles            focus_subjects[], sos_debt_flag, last_sos_date, wakeup_completed_date
-   │            ├──1:1──> screentime_balance  remaining_seconds  (server-authoritative currency)
+   │            ├──1:1──> screentime_balance  unlocked_until     (the unlock window; remaining is derived)
    │            ├──1:N──> knowledge_materials raw_text, source_type ∈ {text, link}
    │            ├──1:N──> quizzes              questions jsonb (incl. answer keys), submitted_at
-   │            └──1:N──> quiz_history         quiz_id, correct_count, earned_seconds
+   │            ├──1:N──> quiz_history         quiz_id, correct_count, total_count, earned_seconds
+   │            └──1:N──> subject_stats        subject, correct_count, total_count  (PK: user_id+subject)
 ```
 
 Every table's `user_id` (or `id` for `users`) is a FK to `public.users(id)` with
@@ -109,6 +126,18 @@ supabase gen types typescript --project-id vkscemjmpyabipuyifgf > ../../frontend
       unused `idx_quizzes_user_id` INFO (kept — it indexes the FK, no composite twin),
       and the Auth leaked-password dashboard setting (see `../docs/rls.md` §6).
 - [x] Migrations 0001–0012 applied to the live project.
+- [x] **0014_stats_and_subject_mastery applied.** Verified by replaying 0001–0014 against a
+      throwaway local Postgres (with an `auth` schema shim) and exercising `user_stats()`
+      for streaks, the grace day, timezone bucketing, zero-filled daily buckets, the
+      `total_count` backfill, and the duplicate-submit / bad-offset / `correct > total`
+      guards.
+- [x] **0015_screentime_window applied.** Verified on a local replay of 0001–0015 (a new
+      user is locked; earning opens a window; reading it does not re-grant it; earning again
+      stacks onto what is left; an expired window is not back-dated), then on the live
+      project: the one existing row backfilled to a window that had closed 3h15m earlier, so
+      `remaining_seconds` went **1440 → 0**, `spent_seconds` **0 → 1440**, exactly one
+      `submit_quiz_reward` signature remains, and `supabase.get_screentime_window()` +
+      `stats_repo.get_user_stats()` both round-trip against the new column. No new advisors.
 - [x] **0013_oauth_only_auth applied.** Drops NOT NULL from `public.users.email`, which
       Sign in with Apple requires: a user who declines the email scope arrives with no
       email, and `handle_new_user()` would otherwise raise 23502 and fail the sign-in.

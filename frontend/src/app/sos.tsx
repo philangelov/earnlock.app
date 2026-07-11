@@ -1,6 +1,13 @@
+/**
+ * Emergency unlock — a bottom sheet sized exactly to its content (`fitToContents`).
+ *
+ * Nothing here adds the bottom safe-area inset. A `formSheet` is already anchored above
+ * the home indicator by UIKit, so padding by `insets.bottom` on top of that leaves a band
+ * of dead white under the last control — which is what made the sheet look like it had
+ * slipped down the screen. The only bottom padding is the sheet's own breathing room.
+ */
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/Button';
 import { Sym } from '@/components/Sym';
@@ -13,12 +20,12 @@ import { useTokens } from '@/theme/theme';
 export default function SosScreen() {
   const t = useTokens();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const sosUsed = useEarnLock((s) => s.sosUsed);
   const activateSos = useEarnLock((s) => s.activateSos);
 
   return (
-    <View style={[styles.root, { paddingBottom: Space.lg + insets.bottom }]}>
+    // No flex:1 — `fitToContents` measures this view, so it must have intrinsic height.
+    <View style={styles.root}>
       <View style={[styles.icon, { backgroundColor: t.dangerSoft }]}>
         <Sym name="exclamationmark.shield.fill" size={28} color={t.danger} />
       </View>
@@ -46,7 +53,7 @@ export default function SosScreen() {
           activateSos();
           router.back();
         }}
-        style={{ marginTop: Space.lg }}
+        style={styles.action}
       />
 
       <Pressable
@@ -65,8 +72,12 @@ export default function SosScreen() {
 }
 
 const styles = StyleSheet.create({
-  // No flex:1 — the sheet uses fitToContents, so content must have intrinsic height.
-  root: { paddingHorizontal: Space.xl, paddingTop: Space.xl },
+  root: {
+    paddingHorizontal: Space.xl,
+    // The grabber lives in the top band; start below it.
+    paddingTop: Space.xl,
+    paddingBottom: Space.lg,
+  },
   icon: {
     width: 60,
     height: 60,
@@ -88,5 +99,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   warnText: { flex: 1, lineHeight: 18 },
-  notNow: { marginTop: Space.sm, paddingVertical: 12, alignItems: 'center' },
+  action: { marginTop: Space.xl },
+  notNow: { marginTop: Space.xs, paddingVertical: 14, alignItems: 'center' },
 });

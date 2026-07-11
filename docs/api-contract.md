@@ -49,17 +49,20 @@ Every non-2xx response uses this body:
 | POST | `/auth/refresh` | no | trade a refresh token for a new JWT | implemented |
 | GET | `/profile` | yes | read profile | implemented |
 | PUT | `/profile` | yes | update profile | implemented |
-| POST | `/knowledge/import` | yes | import study material (text or link) | **not yet implemented** |
-| GET | `/knowledge` | yes | list imported materials | **not yet implemented** |
-| POST | `/quiz/generate` | yes | generate a quiz | implemented (stub question bank) |
+| POST | `/knowledge/import` | yes | import study material (text or link) | implemented |
+| GET | `/knowledge` | yes | list imported materials | implemented |
+| POST | `/quiz/generate` | yes | generate a quiz | implemented |
 | POST | `/quiz/submit` | yes | submit answers, earn time | implemented |
-| GET | `/screentime/balance` | yes | remaining earned seconds | **not yet implemented** |
+| GET | `/screentime/balance` | yes | seconds left on the unlock window | implemented |
+| DELETE | `/account` | yes | permanently delete the account | implemented |
+| GET | `/stats` | yes | learning aggregates for Insights + Learn | implemented |
+| GET | `/wakeup/status` | yes | is the morning lock active today | implemented |
+| POST | `/wakeup/complete` | yes | clear the morning lock | implemented |
 | POST | `/sos` | yes | emergency unlock (once/day) | **not yet implemented** |
-| GET | `/wakeup/status` | yes | is the morning lock active today | **not yet implemented** |
-| POST | `/wakeup/complete` | yes | clear the morning lock | **not yet implemented** |
 
 Endpoints marked *not yet implemented* are contract-only: the frontend mocks them and the
-backend has not shipped them yet.
+backend has not shipped them yet. `/sos` is the last one — today the client flips its own
+`sosUsed`/`debt` flags locally.
 
 ---
 
@@ -239,15 +242,46 @@ their debt flag. Questions currently come from a **stubbed static question bank*
     {
       "id": "q1",
       "prompt": "What is 7 × 8?",
-      "options": ["54", "56", "48", "64"]
+      "options": ["54", "56", "48", "64"],
+      "subject": "Math"
     }
   ],
+  "recap": {
+    "sentence_before": "Photosynthesis is the process where plants use sunlight to produce",
+    "sentence_after": "and oxygen.",
+    "options": ["water", "food", "roots"],
+    "answer": "food"
+  },
   "generated_at": "2026-07-06T09:15:00Z"
 }
 ```
 > **Security:** the response deliberately **omits** `correct_index` and `explanation`.
 > Scoring happens on the server at submit time so answers can't be read from the payload.
 > The full quiz (including the answer key) is persisted server-side in the `quizzes` table.
+
+`subject` is one of the `focus_subjects` whitelist (§3) or `null` if the generator
+declined to label the question. It is safe to expose — it names a question, it doesn't
+answer one — and it is what `/quiz/submit` tallies into `subject_stats` so `/stats` can
+report real per-subject mastery.
+
+#### `recap` — the closing fill-in-the-blank
+
+Authored by the generator in the **same structured-output call** as the questions, so it
+closes the idea the quiz actually covered rather than being a fixed sentence the client
+carries around.
+
+- `sentence_before` / `sentence_after` are the halves either side of the blank.
+  `sentence_after` is `""` when the blank ends the sentence.
+- `options` is exactly **3** chips, one of which is `answer`. The answer's slot is
+  derived from the answer itself, so it is stable across renders but not always first.
+- Unlike a question, the recap **ships with its `answer`**. This is deliberate and safe:
+  the recap is a review exercise, not a graded one — `POST /quiz/submit` has already
+  computed and credited the reward before the recap screen is ever shown, so no screen
+  time can be minted by reading it.
+
+If the model returns a malformed recap, the server substitutes one from the offline bank
+rather than discarding an otherwise valid set of questions. A malformed *question* set is
+still rejected (retry once, then fall back to the offline bank entirely).
 
 **Errors:** `401 unauthorized`. (No request body means no body validation errors today.)
 
@@ -373,21 +407,132 @@ an `explanation` for every **wrong** answer (used by Learning Mode).
 **Errors:** `400 validation_error`, `404 not_found` (unknown quiz_id), `409 conflict`
 (quiz already submitted).
 
+Submitting is a single transaction (`submit_quiz_reward()`, migration 0014): it stamps
+`submitted_at`, credits the balance, appends `quiz_history` (with `total_count`, so
+accuracy is computable), folds the attempt's per-subject tallies into `subject_stats`,
+and clears the debt flag. Either all of it happens or none of it does.
+
 ---
 
-## 6. Screen Time balance
+## 6. Screen Time window
 
 ### `GET /screentime/balance`
 Read by both the native lock (P3) and the countdown timer (P4).
 **Response 200**
 ```json
-{ "remaining_seconds": 1320, "updated_at": "2026-07-06T09:20:00Z" }
+{
+  "remaining_seconds": 1320,
+  "unlocked_until": "2026-07-06T09:42:00Z",
+  "updated_at": "2026-07-06T09:20:00Z"
+}
 ```
-If no balance row exists yet, returns `remaining_seconds: 0`.
+If no window row exists yet, returns `remaining_seconds: 0` and `unlocked_until: null`.
+
+**The wallet stores a deadline, not a duration.** `screentime_balance.unlocked_until` is
+the instant the shield returns; earning extends it, and wall-clock time consumes it whether
+the app is open, backgrounded, or deleted. `remaining_seconds` is **derived on every read**
+(`unlocked_until − now()`, floored at zero) and never stored.
+
+This is load-bearing. Until migration 0015 the column was a stored `remaining_seconds`
+that `/quiz/submit` credited and *nothing ever debited*. The client turned it into a
+deadline on each launch (`unlockUntil = now + remaining_seconds`), so **relaunching the app
+re-granted the full balance** — screen time was effectively unlimited and the countdown
+reset itself. Reading a balance must never be able to extend it.
+
+The server's clock is the only clock involved: a device that moves its own clock forward
+cannot mint seconds, and one that moves it back cannot hoard them.
 
 ---
 
-## 7. SOS (emergency unlock)
+## 6.1 Account
+
+### `DELETE /account`
+Permanently deletes the signed-in account. No body.
+
+**Response 204** — no content.
+
+The caller's Supabase Auth user is hard-deleted with the service-role key. `public.users.id`
+references `auth.users(id) on delete cascade` and every other table cascades from
+`public.users`, so profiles, the screen-time window, imported materials, quizzes, quiz
+history and subject stats all go with it. There is no soft-delete and no tombstone.
+
+The user id comes from the verified JWT, never from the request — a caller cannot name
+someone else's account. Deleting an account that is already gone is a 204, not a 404: the
+caller asked for it to not exist, and it does not.
+
+**Errors:** `401 unauthorized`, `500 internal_error`.
+
+Signing out needs no endpoint — the client drops its tokens.
+
+---
+
+## 7. Stats
+
+### `GET /stats?tz_offset=<minutes>`
+Every aggregate the Insights tab and the Learn roadmap display, in one read. All of it is
+derived from `quiz_history`, `subject_stats` and `screentime_balance` — the client never
+computes, stores or persists a streak of its own.
+
+`tz_offset` is the caller's offset from UTC in **minutes** (`120` for UTC+2, `-420` for
+UTC-7); it defaults to `0`. A streak is a local-calendar notion — a quiz finished at 23:30
+in Sofia belongs to that day, not to the next one as UTC bucketing would claim — so every
+date below is computed by shifting timestamps by this offset.
+
+**Response 200**
+```json
+{
+  "totals": {
+    "quizzes": 12,
+    "questions_answered": 60,
+    "questions_correct": 51,
+    "accuracy": 0.85,
+    "earned_seconds": 9180,
+    "spent_seconds": 7860,
+    "remaining_seconds": 1320
+  },
+  "streak": { "current": 4, "best": 11, "active_today": true },
+  "daily": [
+    { "date": "2026-07-04", "quizzes": 1, "correct": 4, "total": 5, "earned_seconds": 720 }
+  ],
+  "subjects": [
+    { "subject": "Math", "correct": 44, "total": 50, "accuracy": 0.88 }
+  ],
+  "recent": [
+    {
+      "quiz_id": "uuid",
+      "correct_count": 5,
+      "total_count": 5,
+      "earned_seconds": 900,
+      "created_at": "2026-07-10T08:00:00Z"
+    }
+  ]
+}
+```
+
+- `accuracy` is **`null`, not `0`**, when nothing has been answered. "No data" and "got
+  everything wrong" must not render identically, so the client keys off `null` to show an
+  empty state.
+- `questions_correct` and `questions_answered` are both summed over the attempts that
+  carry a `total_count`, so the pair is always self-consistent and `accuracy ≤ 1`. A
+  legacy row with no denominator contributes to `quizzes` but not to either.
+- `spent_seconds` is `max(earned − remaining, 0)`: what actually left the wallet, not a
+  second estimate of it.
+- `daily` is **always exactly 7 entries, oldest first**, zero-filled — a chart must not
+  shift its bars because a day was idle. The last entry is today.
+- `streak.current` counts back from today *or yesterday*: a streak only dies once
+  yesterday passed without a quiz. `active_today` says whether today itself is done.
+- `subjects` is ordered most-answered first, and omits subjects with no answers.
+- `recent` is newest-first, capped at the **30** most recent attempts. The Learn roadmap
+  lays these out as its nodes; chapter numbers are derived from `totals.quizzes`, so they
+  stay correct past the cap. `total_count` is `null` for attempts recorded before
+  migration 0014 whose quiz row no longer exists.
+
+**Errors:** `400 validation_error` (`tz_offset` not an integer, or outside ±840 minutes),
+`401 unauthorized`, `500 internal_error`.
+
+---
+
+## 8. SOS (emergency unlock)
 
 ### `POST /sos`
 Grants a one-per-day emergency unlock and raises the quiz debt.
@@ -410,7 +555,7 @@ Behaviour: sets `last_sos_date = today` and `sos_debt_flag = true`; the next
 
 ---
 
-## 8. Wake-Up Lock
+## 9. Wake-Up Lock
 
 ### `GET /wakeup/status`
 **Response 200**
@@ -471,11 +616,12 @@ create table knowledge_materials (
   created_at  timestamptz not null default now()
 );
 
--- screentime_balance: the currency (server-authoritative)
+-- screentime_balance: the unlock window (server-authoritative currency).
+-- A DEADLINE, not a duration (migration 0015). Remaining seconds are derived, never stored.
 create table screentime_balance (
-  user_id           uuid primary key references users(id) on delete cascade,
-  remaining_seconds integer not null default 0 check (remaining_seconds >= 0),
-  updated_at        timestamptz not null default now()
+  user_id        uuid primary key references users(id) on delete cascade,
+  unlocked_until timestamptz not null default now(),
+  updated_at     timestamptz not null default now()
 );
 
 -- quizzes: generated quizzes + answer keys (migration 0009) — deny-all RLS
@@ -493,8 +639,19 @@ create table quiz_history (
   user_id        uuid not null references users(id) on delete cascade,
   quiz_id        uuid not null,
   correct_count  integer not null,
+  total_count    integer,          -- questions asked (migration 0014); NULL = unknowable
   earned_seconds integer not null,
   created_at     timestamptz not null default now()
+);
+
+-- subject_stats: lifetime per-subject answer tally (migration 0014)
+create table subject_stats (
+  user_id       uuid not null references users(id) on delete cascade,
+  subject       text not null,
+  correct_count integer not null default 0,
+  total_count   integer not null default 0,
+  updated_at    timestamptz not null default now(),
+  primary key (user_id, subject)
 );
 ```
 
@@ -514,11 +671,12 @@ advisor's INFO-level `rls_enabled_no_policy` lint on it is intentional.)
 ### Field ↔ endpoint map
 | Table.field | Set/used by |
 |---|---|
-| `screentime_balance.remaining_seconds` | credited by `/quiz/submit`, `/sos`; read by `/screentime/balance` |
+| `screentime_balance.unlocked_until` | extended by `/quiz/submit`; read (and derived from) by `/screentime/balance` and `/stats` |
 | `profiles.sos_debt_flag` | set by `/sos`, read by `/quiz/generate`, cleared by `/quiz/submit` |
 | `profiles.last_sos_date` | enforces SOS once/day in `/sos` |
 | `profiles.wakeup_completed_date` | set by `/wakeup/complete`, read by `/wakeup/status` |
 | `profiles.focus_subjects` | set by `PUT /profile`; will be used by `/quiz/generate` (future `source=profile` — not yet implemented) |
 | `knowledge_materials` | written by `/knowledge/import`, listed by `/knowledge`; will be read by `/quiz/generate` (future `source=material` — not yet implemented) |
 | `quizzes` | written by `/quiz/generate` (questions + answer key); read and stamped (`submitted_at`) by `/quiz/submit` |
-| `quiz_history` | appended by `/quiz/submit` |
+| `quiz_history` | appended by `/quiz/submit`; aggregated by `/stats` (totals, streak, 7-day series, roadmap nodes) |
+| `subject_stats` | accumulated by `/quiz/submit`; read by `/stats` (subject mastery) |

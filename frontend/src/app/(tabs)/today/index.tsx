@@ -1,15 +1,19 @@
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
+import { Appear } from '@/components/Appear';
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
-import { ListGroup, ListRow, SectionHeader } from '@/components/List';
-import { Sym, type SymName } from '@/components/Sym';
+import { EarnDial } from '@/components/EarnDial';
+import { ListGroup, ListRow } from '@/components/List';
+import { statIcon } from '@/components/StatGlyph';
+import { StreakDots } from '@/components/StreakDots';
+import { Sym } from '@/components/Sym';
 import { TabScreen } from '@/components/TabScreen';
 import { haptic } from '@/lib/haptics';
 import { useScreenTime } from '@/lib/screenTime/store';
+import { useStats } from '@/store/stats';
 import { REWARD_MS, useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -20,12 +24,15 @@ export default function TodayScreen() {
   const router = useRouter();
 
   const unlockUntil = useEarnLock((s) => s.unlockUntil);
-  const streak = useEarnLock((s) => s.streak);
-  const coins = useEarnLock((s) => s.coins);
   const debt = useEarnLock((s) => s.debt);
   const sosUsed = useEarnLock((s) => s.sosUsed);
+  const authed = useEarnLock((s) => s.authed);
   const resetQuizFlow = useEarnLock((s) => s.resetQuizFlow);
   const fetchBalance = useEarnLock((s) => s.fetchBalance);
+
+  const stats = useStats((s) => s.data);
+  const refreshing = useStats((s) => s.refreshing);
+  const fetchStats = useStats((s) => s.fetch);
 
   const available = useScreenTime((s) => s.available);
   const status = useScreenTime((s) => s.status);
@@ -40,6 +47,17 @@ export default function TodayScreen() {
     // which goes stale the moment time has actually elapsed server-side.
     fetchBalance();
   }, [refresh, fetchBalance]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void fetchStats();
+    }, [fetchStats]),
+  );
+
+  const onRefresh = useCallback(() => {
+    void fetchBalance();
+    void fetchStats({ force: true });
+  }, [fetchBalance, fetchStats]);
 
   const startQuiz = () => {
     resetQuizFlow();
@@ -64,73 +82,51 @@ export default function TodayScreen() {
 
   const secondsLeft = Math.max(0, Math.ceil((unlockUntil - now) / 1000));
   const locked = secondsLeft <= 0;
-  const timeLabel = locked
-    ? 'Locked'
-    : `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
-  const barProgress = locked ? 0 : Math.min(1, (secondsLeft * 1000) / (REWARD_MS + 5 * 60_000));
+  const timeLabel = `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}`;
+  // A full ring means "at least one lesson's worth of time still banked". The balance can
+  // exceed that, so it clamps — a ring that could overflow would have to mean something,
+  // and there is nothing for it to mean.
+  const dialProgress = (secondsLeft * 1000) / REWARD_MS;
 
   const approved = status === 'approved';
   const count = selection.total;
   const needsConnect = available && !approved;
   const needsApps = approved && count === 0;
 
-  const stats: { icon: SymName; value: string; label: string }[] = [
-    { icon: 'flame.fill', value: String(streak), label: 'Day streak' },
-    { icon: 'bolt.circle.fill', value: String(coins), label: 'Coins' },
-    { icon: 'checkmark.seal.fill', value: '312', label: 'Solved' },
-  ];
+  const streak = stats?.streak.current ?? 0;
+  const days = stats?.daily ?? [];
+  const earnedToday = days.length > 0 ? days[days.length - 1].earned_seconds : 0;
 
   return (
-    <TabScreen contentStyle={styles.content}>
-      {/* Hero — the earn clock */}
-      <Card style={styles.hero}>
-        <View style={styles.pillRow}>
-          <View style={[styles.statusPill, { backgroundColor: locked ? t.fill : t.accentSoft }]}>
-            <View style={[styles.dot, { backgroundColor: locked ? t.text3 : t.accent }]} />
-            <Text style={[Type.footnoteStrong, { color: locked ? t.text2 : t.accentText }]}>
-              {locked ? 'Apps locked' : 'Apps unlocked'}
-            </Text>
-          </View>
-        </View>
+    <TabScreen contentStyle={styles.content} refreshing={refreshing} onRefresh={onRefresh}>
+      {/* The hero: a ring, a sentence, an action. Nothing else competes. */}
+      <View style={styles.hero}>
+        <EarnDial locked={locked} timeLabel={timeLabel} progress={dialProgress} />
 
-        <Text style={[Type.display, styles.time, { color: locked ? t.text2 : t.text }]}>
-          {timeLabel}
-        </Text>
-        <Text style={[Type.subhead, styles.timeSub, { color: t.text2 }]}>
-          {locked ? 'Learn a little to unlock your apps' : 'of screen time left today'}
-        </Text>
-
-        <View style={[styles.track, { backgroundColor: t.fill }]}>
-          <View
-            style={[
-              styles.trackFill,
-              {
-                width: `${Math.max(barProgress * 100, locked ? 0 : 4)}%`,
-                backgroundColor: t.accent,
-              },
-            ]}
-          />
+        <View style={styles.heroCaption}>
+          <Text style={[Type.callout, styles.caption, { color: t.text2 }]}>
+            {locked
+              ? 'Finish a short lesson to unlock your apps.'
+              : `${count === 0 ? 'Your apps' : `Your ${count} shielded apps`} are open right now.`}
+          </Text>
         </View>
 
         <Button
           label={locked ? 'Earn screen time' : 'Earn more time'}
           icon={<Sym name="bolt.fill" size={17} color={t.onAccent} />}
           onPress={startQuiz}
-          style={styles.earnBtn}
+          style={styles.cta}
         />
-      </Card>
+      </View>
 
       {/* SOS debt banner */}
       {debt && (
-        <Animated.View
-          entering={FadeInDown.duration(240)}
-          style={[styles.debt, { backgroundColor: t.dangerSoft }]}
-        >
+        <Appear from={-10} duration={240} style={[styles.debt, { backgroundColor: t.dangerSoft }]}>
           <Sym name="exclamationmark.triangle.fill" size={15} color={t.danger} />
           <Text style={[Type.footnoteStrong, { color: t.danger, flex: 1 }]}>
             Repaying an SOS unlock — finish your next lesson to clear it.
           </Text>
-        </Animated.View>
+        </Appear>
       )}
 
       {/* Connect Screen Time prompt (only when the device can, but hasn't) */}
@@ -155,61 +151,68 @@ export default function TodayScreen() {
         </Card>
       )}
 
-      {/* Stat strip */}
-      <Card style={styles.strip}>
-        {stats.map((s, i) => (
-          <View
-            key={s.label}
-            style={styles.statCol}
-            accessible
-            accessibilityLabel={`${s.value} ${s.label}`}
-          >
-            {i > 0 && <View style={[styles.divider, { backgroundColor: t.separator }]} />}
-            <Sym name={s.icon} size={16} color={t.text2} />
-            <Text style={[Type.numberLg, { color: t.text }]}>{s.value}</Text>
-            <Text style={[Type.caption, { color: t.text3 }]}>{s.label}</Text>
+      {/* The week, as it actually happened. Hidden until there's a real week to show. */}
+      {authed && days.length > 0 && (
+        <Card style={styles.week}>
+          <View style={styles.weekHead}>
+            <View style={{ flex: 1 }}>
+              <Text style={[Type.headline, { color: t.text }]}>
+                {streak > 0 ? `${streak}-day streak` : 'Start a streak'}
+              </Text>
+              <Text style={[Type.footnote, { color: t.text2, marginTop: 1 }]}>
+                {earnedToday > 0
+                  ? `${Math.round(earnedToday / 60)} min earned today`
+                  : 'Nothing earned today yet'}
+              </Text>
+            </View>
+            {streak > 0 && (
+              <View style={[styles.flame, { backgroundColor: t.iconOrange }]}>
+                <Sym name={statIcon('streak')} size={17} color={t.onIcon} />
+              </View>
+            )}
           </View>
-        ))}
-      </Card>
+          <View style={styles.weekDots}>
+            <StreakDots days={days} />
+          </View>
+        </Card>
+      )}
 
-      {/* Shielded apps — real selection, count-based (app identities are private) */}
-      <View style={styles.section}>
-        <SectionHeader title="Shielded apps" />
-        <ListGroup>
-          <ListRow
-            icon={locked ? 'lock.fill' : 'lock.open.fill'}
-            iconColor={locked ? t.text : t.accentText}
-            iconBg={locked ? t.fill : t.accentSoft}
-            title={
-              needsApps
-                ? 'No apps selected'
-                : `${count} ${count === 1 ? 'app or category' : 'apps & categories'}`
-            }
-            subtitle={
-              !available
-                ? 'Screen Time runs on a device build'
-                : needsConnect
-                  ? 'Connect Screen Time to lock apps'
-                  : needsApps
-                    ? 'Choose which apps to lock'
-                    : locked
-                      ? 'Shielded until you earn time'
-                      : 'Unlocked — re-lock when time runs out'
-            }
-            onPress={() => router.push('/apps')}
-            showChevron
-          />
-        </ListGroup>
-      </View>
-
-      {/* Emergency unlock */}
-      <ListGroup style={styles.section}>
+      {/* Shielded apps + the escape hatch, together: both answer "what about my apps?" */}
+      <ListGroup
+        header="Your apps"
+        footer={`Emergency unlock opens everything for 2 minutes. ${
+          sosUsed ? 'Used today.' : 'One per day.'
+        }`}
+      >
+        <ListRow
+          icon={locked ? 'lock.fill' : 'lock.open.fill'}
+          iconColor={locked ? t.onIcon : t.onAccent}
+          iconBg={locked ? t.iconBlue : t.accent}
+          title={
+            needsApps
+              ? 'No apps selected'
+              : `${count} ${count === 1 ? 'app or category' : 'apps & categories'}`
+          }
+          subtitle={
+            !available
+              ? 'Screen Time runs on a device build'
+              : needsConnect
+                ? 'Connect Screen Time to lock apps'
+                : needsApps
+                  ? 'Choose which apps to lock'
+                  : locked
+                    ? 'Shielded until you earn time'
+                    : 'Unlocked — re-lock when time runs out'
+          }
+          onPress={() => router.push('/apps')}
+          showChevron
+        />
         <ListRow
           icon="cross.case.fill"
-          iconColor={t.danger}
-          iconBg={t.dangerSoft}
+          iconColor={t.onIcon}
+          iconBg={sosUsed ? t.iconGray : t.iconRed}
           title="Emergency unlock"
-          subtitle={`${sosUsed ? 0 : 1} left today · 2 min`}
+          value={sosUsed ? 'None left' : '1 left'}
           onPress={() => {
             haptic.warning();
             router.push('/sos');
@@ -217,21 +220,6 @@ export default function TodayScreen() {
           showChevron
         />
       </ListGroup>
-
-      {/* Screen Time connection status */}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Screen Time settings, opens Profile"
-        hitSlop={12}
-        onPress={() => router.push('/profile')}
-        style={({ pressed }) => [styles.stStatus, pressed && { opacity: 0.6 }]}
-      >
-        <View style={[styles.stDot, { backgroundColor: approved ? t.accent : t.text3 }]} />
-        <Text style={[Type.caption, { color: t.text3 }]}>
-          Screen Time ·{' '}
-          {!available ? 'Device build required' : approved ? 'Connected' : 'Not connected'}
-        </Text>
-      </Pressable>
     </TabScreen>
   );
 }
@@ -239,38 +227,15 @@ export default function TodayScreen() {
 const styles = StyleSheet.create({
   content: {
     paddingHorizontal: Space.xl,
-    paddingTop: Space.xs,
+    paddingTop: Space.sm,
     paddingBottom: Space.xxxl,
-    gap: Space.lg,
+    gap: Space.xl,
   },
 
-  hero: {
-    paddingHorizontal: Space.xl,
-    paddingTop: Space.lg,
-    paddingBottom: Space.xl,
-    alignItems: 'center',
-  },
-  pillRow: { alignSelf: 'stretch', alignItems: 'center' },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 5,
-    paddingHorizontal: 11,
-    borderRadius: Radius.pill,
-  },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  time: { marginTop: Space.lg, textAlign: 'center' },
-  timeSub: { marginTop: 2, textAlign: 'center' },
-  track: {
-    alignSelf: 'stretch',
-    height: 8,
-    borderRadius: Radius.pill,
-    marginTop: Space.xl,
-    overflow: 'hidden',
-  },
-  trackFill: { height: '100%', borderRadius: Radius.pill },
-  earnBtn: { marginTop: Space.xl },
+  hero: { alignItems: 'stretch' },
+  heroCaption: { marginTop: Space.xl, paddingHorizontal: Space.md },
+  caption: { textAlign: 'center' },
+  cta: { marginTop: Space.xl },
 
   debt: {
     flexDirection: 'row',
@@ -293,26 +258,15 @@ const styles = StyleSheet.create({
   },
   connectBtn: { width: 'auto', paddingHorizontal: 18 },
 
-  strip: { flexDirection: 'row', paddingVertical: Space.lg, paddingHorizontal: 4 },
-  statCol: { flex: 1, alignItems: 'center', gap: 4 },
-  divider: {
-    position: 'absolute',
-    left: 0,
-    top: '50%',
-    width: StyleSheet.hairlineWidth,
-    height: 34,
-    transform: [{ translateY: -17 }],
-  },
-
-  section: { gap: 0 },
-
-  stStatus: {
-    flexDirection: 'row',
+  week: { padding: Space.lg },
+  weekHead: { flexDirection: 'row', alignItems: 'center', gap: Space.md },
+  flame: {
+    width: 36,
+    height: 36,
+    borderRadius: Radius.control,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    marginTop: Space.xs,
-    paddingVertical: Space.sm,
   },
-  stDot: { width: 6, height: 6, borderRadius: 3 },
+  weekDots: { marginTop: Space.lg },
 });

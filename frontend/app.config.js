@@ -50,6 +50,16 @@ module.exports = () => {
   // the same way the push entitlement did.
   plugins.push('expo-apple-authentication');
 
+  // The profile picture. iOS's PHPicker runs out of process, so no library permission is
+  // ever requested — but App Review still reads the string if one is ever surfaced.
+  plugins.push([
+    'expo-image-picker',
+    {
+      photosPermission:
+        'EarnLock uses a photo you choose as your profile picture. It stays on this device.',
+    },
+  ]);
+
   // Only when configured: the plugin throws without an iosUrlScheme, and a checkout with no
   // Google credentials should still build (the button disables itself — see lib/auth.ts).
   const iosUrlScheme = reversedClientId(GOOGLE_IOS_CLIENT_ID);

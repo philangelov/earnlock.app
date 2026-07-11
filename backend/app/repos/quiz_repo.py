@@ -54,11 +54,18 @@ def submit_reward(
     user_id: str,
     quiz_id: str,
     correct_count: int,
+    total_count: int,
     earned_seconds: int,
     clear_debt: bool,
+    subject_stats: list[dict] | None = None,
 ) -> int:
-    """Atomically mark the quiz submitted, credit the balance, append history, and clear
-    the SOS debt flag if satisfied. Returns the new balance in seconds.
+    """Atomically mark the quiz submitted, credit the balance, append history, fold in
+    the per-subject tallies, and clear the SOS debt flag if satisfied. Returns the new
+    balance in seconds.
+
+    `subject_stats` is `[{subject, correct, total}]` for this attempt (see
+    `quiz_content.subject_tally`); it is accumulated into `public.subject_stats` inside
+    the same transaction, so mastery can never drift from the history it summarizes.
 
     Raises QuizAlreadySubmitted if the quiz was already scored.
     """
@@ -70,8 +77,10 @@ def submit_reward(
                 "p_user_id": user_id,
                 "p_quiz_id": quiz_id,
                 "p_correct_count": correct_count,
+                "p_total_count": total_count,
                 "p_earned_seconds": earned_seconds,
                 "p_clear_debt": clear_debt,
+                "p_subject_stats": subject_stats or [],
             },
         )
     except SupabaseError as exc:

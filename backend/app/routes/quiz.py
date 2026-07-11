@@ -10,9 +10,10 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, current_app, g, jsonify, request
 
-from app.ai import generate_quiz_questions, get_explainer
+from app.ai import generate_quiz as generate_quiz_payload
+from app.ai import get_explainer
 from app.middleware.auth import require_auth
-from app.quiz_content import public_view
+from app.quiz_content import public_view, subject_tally
 from app.repos import knowledge_repo, quiz_repo
 from app.repos.quiz_repo import QuizAlreadySubmitted
 from app.services import supabase
@@ -94,13 +95,14 @@ def generate_quiz():
             return _error("validation_error", "text is required for source=text", 400)
         material_text = text.strip()[: current_app.config["KNOWLEDGE_MAX_CHARS"]]
 
-    questions = generate_quiz_questions(
+    generated = generate_quiz_payload(
         count=question_count,
         subjects=subjects,
         grade_or_age=grade_or_age,
         material_text=material_text,
         locale=locale,
     )
+    questions = generated["questions"]
     quiz_id = quiz_repo.create_quiz(g.user_id, questions)
     return jsonify(
         {
@@ -109,6 +111,11 @@ def generate_quiz():
             "source": source,
             "question_count": len(questions),
             "questions": public_view(questions),  # answers omitted (security)
+            # The recap ships with its answer, unlike the questions. It is a review
+            # exercise, not a graded one: the reward was already computed from the
+            # multiple-choice answers by /quiz/submit, which runs before the recap
+            # screen is ever shown. Nothing is mintable by reading this.
+            "recap": generated["recap"],
             "generated_at": _now_iso(),
         }
     )
@@ -189,14 +196,16 @@ def submit_quiz():
     had_debt = quiz_repo.get_debt_flag(g.user_id)
     sos_debt_cleared = had_debt and correct_count >= target
 
-    # Atomic: idempotent submit + balance credit + history + debt clear.
+    # Atomic: idempotent submit + balance credit + history + subject tally + debt clear.
     try:
         new_balance = quiz_repo.submit_reward(
             user_id=g.user_id,
             quiz_id=quiz_id,
             correct_count=correct_count,
+            total_count=len(results),
             earned_seconds=earned_seconds,
             clear_debt=sos_debt_cleared,
+            subject_stats=subject_tally(questions, results),
         )
     except QuizAlreadySubmitted:
         return _error("conflict", "quiz already submitted", 409)

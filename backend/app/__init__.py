@@ -3,12 +3,14 @@ from flask_cors import CORS
 from jwt import PyJWKClient
 
 from app.config import get_config
+from app.routes.account import account_bp
 from app.routes.auth import auth_bp
 from app.routes.health import health_bp
 from app.routes.knowledge import knowledge_bp
 from app.routes.profile import profile_bp
 from app.routes.quiz import quiz_bp
 from app.routes.screentime import screentime_bp
+from app.routes.stats import stats_bp
 from app.routes.wakeup import wakeup_bp
 from app.services.supabase import SupabaseError
 
@@ -23,12 +25,14 @@ def create_app():
     jwks_url = f"{config.SUPABASE_URL}/auth/v1/.well-known/jwks.json"
     app.jwks_client = PyJWKClient(jwks_url)
 
+    app.register_blueprint(account_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(knowledge_bp)
     app.register_blueprint(profile_bp)
     app.register_blueprint(quiz_bp)
     app.register_blueprint(screentime_bp)
+    app.register_blueprint(stats_bp)
     app.register_blueprint(wakeup_bp)
 
     @app.errorhandler(SupabaseError)

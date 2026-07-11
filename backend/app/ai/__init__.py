@@ -9,9 +9,11 @@ from app.ai.generator import (
     DummyQuestionGenerator,
     GeneratorError,
     QuestionGenerator,
-    generate_quiz_questions,
+    generate_quiz,
     get_generator,
+    validate_generation,
     validate_questions,
+    validate_recap,
 )
 
 __all__ = [
@@ -23,7 +25,9 @@ __all__ = [
     "DummyQuestionGenerator",
     "ClaudeQuestionGenerator",
     "GeneratorError",
-    "generate_quiz_questions",
+    "generate_quiz",
     "get_generator",
+    "validate_generation",
     "validate_questions",
+    "validate_recap",
 ]
