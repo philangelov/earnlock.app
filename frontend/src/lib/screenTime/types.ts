@@ -30,6 +30,11 @@ export interface ScreenTimeFacade {
   /** Read the current shielded-selection counts from the persisted selection. */
   getSelectionCount(): SelectionCount;
 
+  /** Write EarnLock's custom lock screen (title, lime "Start a quiz" button, deep link)
+   *  so a blocked app shows our shield instead of iOS's default. Persists in the app
+   *  group; safe to call anytime and a no-op off-device. */
+  configureShield(): void;
+
   /** Immediately shield (block) the chosen apps. */
   shield(): Promise<void>;
   /** Immediately unshield (allow) the chosen apps. */

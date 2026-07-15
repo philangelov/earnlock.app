@@ -30,6 +30,7 @@ EMPTY_STATS: dict = {
     "streak": {"current": 0, "best": 0, "active_today": False},
     "daily": [],
     "subjects": [],
+    "materials": [],
     "recent": [],
 }
 

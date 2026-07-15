@@ -13,12 +13,13 @@ from app.services import supabase
 @pytest.fixture
 def gen_stubs(monkeypatch):
     """Stub the DB reads/writes /quiz/generate performs, keeping the suite hermetic."""
-    state = {"created_questions": None}
+    state = {"created_questions": None, "created_material_id": None}
 
     monkeypatch.setattr(quiz_repo, "get_debt_flag", lambda user_id: False)
 
-    def create_quiz(user_id, questions):
+    def create_quiz(user_id, questions, material_id=None):
         state["created_questions"] = questions
+        state["created_material_id"] = material_id
         return "quiz-xyz"
 
     monkeypatch.setattr(quiz_repo, "create_quiz", create_quiz)
@@ -97,6 +98,13 @@ def test_generate_source_material(client, auth_headers, gen_stubs, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.get_json()["source"] == "material"
+    # The quiz records the material it came from, so its understanding can be tracked.
+    assert gen_stubs["created_material_id"] == "mat-1"
+
+
+def test_generate_profile_source_has_no_material(client, auth_headers, gen_stubs):
+    client.post("/quiz/generate", headers=auth_headers)
+    assert gen_stubs["created_material_id"] is None
 
 
 def test_generate_source_material_requires_id(client, auth_headers, gen_stubs):

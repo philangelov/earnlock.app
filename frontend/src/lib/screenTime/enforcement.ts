@@ -12,6 +12,7 @@
  */
 import { useEffect, useSyncExternalStore } from 'react';
 
+import { cancelWindowReminders, scheduleWindowReminders } from '@/lib/notifications';
 import { useEarnLock } from '@/store/useEarnLock';
 
 import { screenTime } from './index';
@@ -19,6 +20,7 @@ import { useScreenTime } from './store';
 
 export function useLockEnforcement() {
   const unlockUntil = useEarnLock((s) => s.unlockUntil);
+  const notificationsGranted = useEarnLock((s) => s.notificationsGranted);
   // Re-run when the selection or authorization changes too, so newly chosen apps (or a just-
   // granted authorization) get shielded immediately while locked — not only at the next lock
   // transition.
@@ -36,6 +38,11 @@ export function useLockEnforcement() {
 
     if (remaining > 0) {
       void screenTime.unshield();
+      // Mirror the window with local reminders: a "running low" nudge and a "re-locked"
+      // one, timed off the same deadline the JS timer below re-shields at. Only when the
+      // learner opted into notifications; otherwise make sure none linger.
+      if (notificationsGranted) void scheduleWindowReminders(unlockUntil);
+      else void cancelWindowReminders();
       const id = setTimeout(() => {
         if (!cancelled) void screenTime.shield();
       }, remaining);
@@ -46,8 +53,10 @@ export function useLockEnforcement() {
     }
 
     void screenTime.shield();
+    // The window is closed — the apps are locked now, so a reminder about it is moot.
+    void cancelWindowReminders();
     return () => {
       cancelled = true;
     };
-  }, [unlockUntil, hydrated, selectionTotal, status]);
+  }, [unlockUntil, hydrated, selectionTotal, status, notificationsGranted]);
 }

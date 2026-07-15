@@ -14,14 +14,19 @@ import type { SymName } from '@/components/Sym';
 
 /* ---------------------------------------------------------------- subjects */
 
-export type SubjectKey =
-  'Math' | 'Biology' | 'History' | 'English' | 'Physics' | 'Chemistry' | 'Geography' | 'Coding';
+/**
+ * A subject is just a string now. The learner can study any of the predefined ones below
+ * OR add their own — unlimited, and the backend's `subject_stats`/`focus_subjects` both key
+ * on free text, so a custom subject earns and tracks exactly like a built-in one.
+ */
+export type SubjectKey = string;
 
 export type SubjectDef = { key: SubjectKey; icon: SymName };
 
-/** Must stay in step with the backend's `VALID_SUBJECTS` (backend/app/validation.py):
- *  the server rejects a PUT /profile carrying a subject it doesn't know, and tags each
- *  generated question with one of these names. */
+/** The predefined subjects the picker offers up front, with an SF Symbol each. The list is
+ *  free to grow: the backend no longer rejects an unknown subject, it only canonicalises the
+ *  casing of the ones it recognises (keep this roughly in step with backend VALID_SUBJECTS so
+ *  the built-ins store with tidy casing). Custom subjects fall back to a generic book glyph. */
 export const SUBJECT_DEFS: SubjectDef[] = [
   { key: 'Math', icon: 'function' },
   { key: 'Biology', icon: 'leaf.fill' },
@@ -31,13 +36,62 @@ export const SUBJECT_DEFS: SubjectDef[] = [
   { key: 'Chemistry', icon: 'drop.fill' },
   { key: 'Geography', icon: 'globe.americas.fill' },
   { key: 'Coding', icon: 'chevron.left.forwardslash.chevron.right' },
+  { key: 'Literature', icon: 'books.vertical.fill' },
+  { key: 'Computer Science', icon: 'desktopcomputer' },
+  { key: 'Economics', icon: 'chart.line.uptrend.xyaxis' },
+  { key: 'Art', icon: 'paintpalette.fill' },
+  { key: 'Music', icon: 'music.note' },
+  { key: 'Languages', icon: 'character.bubble.fill' },
+  { key: 'Psychology', icon: 'brain.head.profile' },
+  { key: 'Astronomy', icon: 'moon.stars.fill' },
+  { key: 'Health', icon: 'heart.fill' },
+  { key: 'Statistics', icon: 'chart.bar.fill' },
 ];
 
 const SUBJECT_ICONS = new Map<string, SymName>(SUBJECT_DEFS.map((s) => [s.key, s.icon]));
 
 /** Icon for a subject name coming back from the server, which may be one we don't draw. */
 export function subjectIcon(subject: string): SymName {
-  return SUBJECT_ICONS.get(subject) ?? 'book.fill';
+  return SUBJECT_ICONS.get(subject) ?? 'book.closed.fill';
+}
+
+/** The subjects a learner has switched on, ordered predefined-first then custom, de-duped.
+ *  This is the single source of truth for "what am I studying" — used for the focus label,
+ *  the profile update sent on sign-in, and the Learn journey's subject switcher. */
+export function chosenSubjects(subj: Record<string, boolean>, custom: string[] = []): string[] {
+  const ordered = [...SUBJECT_DEFS.map((d) => d.key), ...custom];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const key of ordered) {
+    if (subj[key] && !seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  // Defensive: a selected key that is in neither list still counts as chosen.
+  for (const key of Object.keys(subj)) {
+    if (subj[key] && !seen.has(key)) {
+      seen.add(key);
+      out.push(key);
+    }
+  }
+  return out;
+}
+
+/** Normalise a typed-in custom subject: trim, collapse inner whitespace, cap length.
+ *  Returns '' for anything that isn't a usable subject name. */
+export function normalizeSubject(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 40);
+}
+
+/** Every pickable subject — the predefined ones followed by the learner's custom ones. */
+export function allSubjects(custom: string[] = []): string[] {
+  return [...SUBJECT_DEFS.map((d) => d.key), ...custom];
+}
+
+/** How many subjects are currently switched on (predefined or custom). */
+export function chosenCount(subj: Record<string, boolean>): number {
+  return Object.values(subj).filter(Boolean).length;
 }
 
 /* -------------------------------------------------------------- quiz material */

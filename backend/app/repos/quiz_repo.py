@@ -18,12 +18,21 @@ class QuizAlreadySubmitted(Exception):
 _ALREADY_SUBMITTED_MARKER = "quiz_already_submitted"
 
 
-def create_quiz(user_id: str, questions: list[dict]) -> str:
-    """Persist a generated quiz (questions incl. answer keys) and return its id."""
+def create_quiz(
+    user_id: str, questions: list[dict], material_id: str | None = None
+) -> str:
+    """Persist a generated quiz (questions incl. answer keys) and return its id.
+
+    ``material_id`` records which imported material the quiz was generated from (None
+    for a profile/text quiz), so the reward credits that material's understanding.
+    """
+    body = {"user_id": user_id, "questions": questions}
+    if material_id:
+        body["material_id"] = material_id
     rows, _ = _rest_request(
         "POST",
         "quizzes",
-        body={"user_id": user_id, "questions": questions},
+        body=body,
         prefer="return=representation",
     )
     return rows[0]["id"]

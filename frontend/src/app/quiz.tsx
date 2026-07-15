@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   Pressable,
@@ -27,11 +27,14 @@ import { useTokens } from '@/theme/theme';
 export default function QuizScreen() {
   const t = useTokens();
   const router = useRouter();
+  // Present when the quiz was started from a specific material (Materials manager / Learn).
+  const { materialId } = useLocalSearchParams<{ materialId?: string }>();
 
   const quizQuestions = useEarnLock((s) => s.quizQuestions);
   const qIndex = useEarnLock((s) => s.qIndex);
   const selected = useEarnLock((s) => s.selected);
   const quizError = useEarnLock((s) => s.quizError);
+  const quizLoading = useEarnLock((s) => s.quizLoading);
   const authed = useEarnLock((s) => s.authed);
   const beginQuiz = useEarnLock((s) => s.beginQuiz);
   const pick = useEarnLock((s) => s.pick);
@@ -42,14 +45,15 @@ export default function QuizScreen() {
   useEffect(() => {
     if (started.current || quizQuestions.length > 0) return;
     started.current = true;
-    beginQuiz();
-  }, [beginQuiz, quizQuestions.length]);
+    beginQuiz(materialId);
+  }, [beginQuiz, quizQuestions.length, materialId]);
 
   const q = quizQuestions[qIndex];
   const isLast = qIndex + 1 >= quizQuestions.length;
   const qProg = quizQuestions.length > 0 ? qIndex / quizQuestions.length : 0;
 
   const onButton = async () => {
+    if (quizLoading) return; // guard: submit is already in flight
     haptic.select();
     if (!isLast) {
       nextQuestion();
@@ -81,7 +85,7 @@ export default function QuizScreen() {
               {authed ? (
                 <Button
                   label="Try again"
-                  onPress={() => beginQuiz()}
+                  onPress={() => beginQuiz(materialId)}
                   style={{ marginTop: Space.lg }}
                 />
               ) : (
@@ -165,11 +169,27 @@ export default function QuizScreen() {
       {/* Footer */}
       <View style={styles.footer}>
         <Button
-          label={isLast ? 'Submit quiz' : 'Next question'}
-          disabled={selected == null}
+          label={isLast ? (quizLoading ? 'Scoring…' : 'Submit quiz') : 'Next question'}
+          loading={isLast && quizLoading}
+          disabled={selected == null || quizLoading}
           onPress={onButton}
         />
       </View>
+
+      {/* Grading overlay — submit grades server-side and writes a short explanation for
+          every wrong answer, so it takes a moment. Cover the quiz so nothing is tappable
+          and the wait reads as progress, not a freeze. */}
+      {quizLoading && (
+        <View style={[styles.overlay, { backgroundColor: t.bg }]} pointerEvents="auto">
+          <ActivityIndicator size="large" color={t.accent} />
+          <Text style={[Type.headline, { color: t.text, marginTop: Space.lg }]}>
+            Scoring your answers…
+          </Text>
+          <Text style={[Type.subhead, { color: t.text2, marginTop: 6, textAlign: 'center' }]}>
+            Working out what you earned and where to help.
+          </Text>
+        </View>
+      )}
     </Screen>
   );
 }
@@ -203,4 +223,15 @@ const styles = StyleSheet.create({
 
   footer: { paddingHorizontal: Space.xl, paddingTop: Space.sm, gap: Space.md },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Space.xl },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: Space.xxl,
+    opacity: 0.98,
+  },
 });

@@ -3,7 +3,7 @@ import { StyleSheet, Text } from 'react-native';
 
 import { OnboardingStep } from '@/components/onboarding/OnboardingStep';
 import { SubjectChips } from '@/components/SubjectChips';
-import { SUBJECT_DEFS } from '@/store/content';
+import { allSubjects, chosenCount } from '@/store/content';
 import { voice } from '@/store/onboarding';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Space } from '@/theme/tokens';
@@ -15,11 +15,13 @@ export default function SubjectsStep() {
   const router = useRouter();
   const subj = useEarnLock((s) => s.subj);
   const toggleSubj = useEarnLock((s) => s.toggleSubj);
+  const customSubjects = useEarnLock((s) => s.customSubjects);
+  const addCustomSubject = useEarnLock((s) => s.addCustomSubject);
   const usage = useEarnLock((s) => s.usage);
   const name = useEarnLock((s) => s.name);
 
   const v = voice(usage, name);
-  const chosen = SUBJECT_DEFS.filter((s) => subj[s.key]).length;
+  const chosen = chosenCount(subj);
 
   return (
     <OnboardingStep
@@ -30,7 +32,14 @@ export default function SubjectsStep() {
       ctaDisabled={chosen === 0}
       onCta={() => router.push('/onboarding/commitment')}
     >
-      <SubjectChips selected={subj} onToggle={toggleSubj} stagger={35} align="center" />
+      <SubjectChips
+        subjects={allSubjects(customSubjects)}
+        selected={subj}
+        onToggle={toggleSubj}
+        onAddCustom={addCustomSubject}
+        stagger={35}
+        align="center"
+      />
 
       <Text style={[Type.caption, styles.footnote, { color: t.text3 }]}>
         {chosen === 0 ? 'Choose at least one to continue.' : `${chosen} chosen`}

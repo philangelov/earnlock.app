@@ -4,13 +4,19 @@
  * the lock-enforcement bridge (store clock → shield/unshield). The splash hides once the
  * persisted theme is ready so the app opens in the user's chosen appearance.
  */
-import { Stack, ThemeProvider as NavigationThemeProvider } from 'expo-router';
+import { Stack, ThemeProvider as NavigationThemeProvider, useRouter, type Href } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo } from 'react';
 import { AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import {
+  observeNotificationTaps,
+  setupNotificationHandler,
+  syncDailyReminder,
+} from '@/lib/notifications';
+import { screenTime } from '@/lib/screenTime';
 import { useLockEnforcement } from '@/lib/screenTime/enforcement';
 import { useScreenTime } from '@/lib/screenTime/store';
 import { useEarnLock } from '@/store/useEarnLock';
@@ -21,8 +27,22 @@ SplashScreen.preventAutoHideAsync();
 
 function RootNavigator() {
   const t = useTokens();
+  const router = useRouter();
   const { dark, ready } = useThemeMode();
   const navTheme = useMemo(() => makeNavTheme(dark, t), [dark, t]);
+
+  // Local notifications: register how they look, and route a tap (or the notification that
+  // cold-launched the app) to the quiz it points at.
+  useEffect(() => {
+    setupNotificationHandler();
+    return observeNotificationTaps((url) => router.navigate(url as Href));
+  }, [router]);
+
+  // Schedule / cancel the daily study reminder to match the learner's notification choice.
+  const notificationsGranted = useEarnLock((s) => s.notificationsGranted);
+  useEffect(() => {
+    void syncDailyReminder(notificationsGranted);
+  }, [notificationsGranted]);
 
   // Re-read Screen Time on launch and whenever the app returns to the foreground, so status +
   // selection count stay fresh after the system authorization sheet, the app picker, or changes
@@ -34,6 +54,10 @@ function RootNavigator() {
   const refreshScreenTime = useScreenTime((s) => s.refresh);
   const fetchBalance = useEarnLock((s) => s.fetchBalance);
   useEffect(() => {
+    // Install EarnLock's custom lock screen once at launch. It persists in the app group, so
+    // a blocked app shows our shield (with the "Start a quiz" deep link) rather than iOS's
+    // default — even if the OS re-applies the block after a reboot.
+    screenTime.configureShield();
     refreshScreenTime();
     void fetchBalance();
     const sub = AppState.addEventListener('change', (state) => {

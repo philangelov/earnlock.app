@@ -1,6 +1,8 @@
 import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import type { ComponentProps } from 'react';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Button } from '@/components/Button';
 import { Card } from '@/components/Card';
@@ -8,7 +10,7 @@ import { Screen } from '@/components/Screen';
 import { StepHeader } from '@/components/StepHeader';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
-import { STEP_TOTAL, stepIndex } from '@/store/onboarding';
+import { useStats } from '@/store/stats';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -22,29 +24,67 @@ export default function MaterialScreen() {
   const setImportText = useEarnLock((s) => s.setImportText);
   const pasteExample = useEarnLock((s) => s.pasteExample);
   const uploadName = useEarnLock((s) => s.uploadName);
-  const setUploadName = useEarnLock((s) => s.setUploadName);
+  const uploadUri = useEarnLock((s) => s.uploadUri);
+  const uploadData = useEarnLock((s) => s.uploadData);
+  const setUpload = useEarnLock((s) => s.setUpload);
   const doImport = useEarnLock((s) => s.doImport);
   const importLoading = useEarnLock((s) => s.importLoading);
   const importError = useEarnLock((s) => s.importError);
-  const onboarded = useEarnLock((s) => s.onboarded);
 
-  const canContinue = importText.trim().length > 0 || uploadName.length > 0;
+  const hasFile = !!(uploadUri || uploadData);
+  const canContinue = importText.trim().length > 0 || hasFile;
 
-  const pickFile = async () => {
+  // A picked file wins over stray text, so a paste box that still has content is dimmed
+  // once a file is chosen — the Save will send the file, not the text.
+  const pickPdf = async () => {
     haptic.tap();
-    const res = await DocumentPicker.getDocumentAsync({
-      type: ['application/pdf', 'image/*'],
-      copyToCacheDirectory: false,
-    });
-    if (!res.canceled && res.assets[0]) setUploadName(res.assets[0].name);
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+      });
+      const asset = res.canceled ? null : res.assets[0];
+      if (asset) {
+        setUpload({
+          uri: asset.uri,
+          name: asset.name,
+          mimeType: asset.mimeType || 'application/pdf',
+        });
+      }
+    } catch {
+      Alert.alert('Could not open that file', 'Try another PDF, or paste the text instead.');
+    }
+  };
+
+  const pickPhoto = async () => {
+    haptic.tap();
+    try {
+      // base64:true makes iOS hand back JPEG bytes even for a HEIC photo, so the server
+      // (and the model that reads it) always gets a format it understands.
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.8,
+        base64: true,
+      });
+      const asset = res.canceled ? null : res.assets[0];
+      if (asset?.base64) {
+        setUpload({ data: asset.base64, name: asset.fileName || 'Photo', mimeType: 'image/jpeg' });
+      }
+    } catch {
+      Alert.alert('Could not open that photo', 'Try another photo, or paste the text instead.');
+    }
   };
 
   const onContinue = async () => {
     const ok = await doImport();
     if (!ok) return;
-    if (onboarded) router.back();
-    else router.push('/apps');
+    // The material list is derived from GET /stats; force a refetch so the one just added
+    // shows up on the Materials screen straight away rather than after the 30s cache window.
+    void useStats.getState().fetch({ force: true });
+    router.back();
   };
+
+  const saveLabel = importLoading ? (hasFile ? 'Reading your file…' : 'Saving…') : 'Save';
 
   return (
     <Screen
@@ -53,17 +93,13 @@ export default function MaterialScreen() {
       avoidKeyboard
       header={
         <View style={styles.header}>
-          <StepHeader
-            step={stepIndex('material')}
-            total={STEP_TOTAL}
-            title={onboarded ? 'Study material' : undefined}
-            onBack={() => router.back()}
-          />
+          <StepHeader step={0} total={1} title="Study material" onBack={() => router.back()} />
         </View>
       }
       footer={
         <Button
-          label={importLoading ? 'Saving…' : onboarded ? 'Save' : 'Generate questions'}
+          label={saveLabel}
+          loading={importLoading}
           disabled={!canContinue || importLoading}
           onPress={onContinue}
         />
@@ -75,13 +111,15 @@ export default function MaterialScreen() {
         <Text style={[Type.footnote, styles.error, { color: t.danger }]}>{importError}</Text>
       )}
       <Text style={[Type.subhead, styles.sub, { color: t.text2 }]}>
-        Paste notes or upload a worksheet — questions are generated from your own content.
+        Paste notes, upload a PDF, or snap a photo of a page — questions are generated from your own
+        content.
       </Text>
 
-      <Card style={styles.inputCard}>
+      <Card style={hasFile ? [styles.inputCard, { opacity: 0.45 }] : styles.inputCard}>
         <TextInput
           value={importText}
           onChangeText={setImportText}
+          editable={!hasFile}
           placeholder="Paste class notes, a chapter summary, or vocabulary…"
           placeholderTextColor={t.text3}
           accessibilityLabel="Study material"
@@ -94,6 +132,7 @@ export default function MaterialScreen() {
             accessibilityRole="button"
             accessibilityLabel="Paste example notes"
             hitSlop={{ top: 10, bottom: 10 }}
+            disabled={hasFile}
             onPress={() => {
               haptic.tap();
               pasteExample();
@@ -113,34 +152,80 @@ export default function MaterialScreen() {
 
       <Text style={[Type.overline, styles.or, { color: t.text3 }]}>OR</Text>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={
-          uploadName ? `Uploaded ${uploadName}, tap to replace` : 'Upload a PDF or photo'
-        }
-        onPress={pickFile}
-        style={({ pressed }) => pressed && { opacity: 0.7 }}
-      >
+      {hasFile ? (
         <Card style={styles.upload}>
-          <View style={[styles.uploadIcon, { backgroundColor: t.fill }]}>
-            <Sym
-              name={uploadName ? 'checkmark' : 'arrow.up.doc.fill'}
-              size={18}
-              color={uploadName ? t.accentText : t.text}
-            />
+          <View style={[styles.uploadIcon, { backgroundColor: t.accentSoft }]}>
+            <Sym name="checkmark" size={18} color={t.accentText} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[Type.headline, { color: t.text }]} numberOfLines={1}>
-              {uploadName || 'Upload a PDF or photo'}
+              {uploadName || 'Selected file'}
             </Text>
-            <Text style={[Type.footnote, { color: t.text3 }]}>
-              {uploadName ? 'Ready to use' : 'Worksheets, textbook pages, screenshots'}
-            </Text>
+            <Text style={[Type.footnote, { color: t.text3 }]}>Ready — Save to add it</Text>
           </View>
-          <Sym name="chevron.right" size={14} color={t.text3} weight="semibold" />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Remove selected file"
+            hitSlop={10}
+            onPress={() => {
+              haptic.tap();
+              setUpload(null);
+            }}
+            style={({ pressed }) => [styles.clear, pressed && { opacity: 0.5 }]}
+          >
+            <Sym name="xmark.circle.fill" size={22} color={t.text3} />
+          </Pressable>
         </Card>
-      </Pressable>
+      ) : (
+        <View style={styles.choosers}>
+          <UploadChoice
+            icon="arrow.up.doc.fill"
+            title="Upload a PDF"
+            subtitle="Worksheets, chapters, handouts"
+            onPress={pickPdf}
+          />
+          <UploadChoice
+            icon="camera.fill"
+            title="Choose a photo"
+            subtitle="Textbook pages, screenshots"
+            onPress={pickPhoto}
+          />
+        </View>
+      )}
     </Screen>
+  );
+}
+
+function UploadChoice({
+  icon,
+  title,
+  subtitle,
+  onPress,
+}: {
+  icon: ComponentProps<typeof Sym>['name'];
+  title: string;
+  subtitle: string;
+  onPress: () => void;
+}) {
+  const t = useTokens();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+      style={({ pressed }) => [pressed && { opacity: 0.7 }]}
+    >
+      <Card style={styles.upload}>
+        <View style={[styles.uploadIcon, { backgroundColor: t.fill }]}>
+          <Sym name={icon} size={18} color={t.text} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[Type.headline, { color: t.text }]}>{title}</Text>
+          <Text style={[Type.footnote, { color: t.text3 }]}>{subtitle}</Text>
+        </View>
+        <Sym name="chevron.right" size={14} color={t.text3} weight="semibold" />
+      </Card>
+    </Pressable>
   );
 }
 
@@ -178,6 +263,7 @@ const styles = StyleSheet.create({
 
   or: { textAlign: 'center', marginVertical: Space.lg },
 
+  choosers: { gap: Space.md },
   upload: { flexDirection: 'row', alignItems: 'center', gap: Space.md, padding: Space.lg },
   uploadIcon: {
     width: 42,
@@ -187,4 +273,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  clear: { padding: 2 },
 });

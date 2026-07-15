@@ -158,7 +158,10 @@ async function performRefresh(): Promise<string | null> {
   );
 
   if (!res.ok) {
-    await clearSession();
+    // Only tear the session down if it's still the one we tried to refresh. A sign-in that
+    // landed while this refresh was in flight — common when a stale or server-deleted
+    // session is cleaned up at launch — must not have its fresh tokens wiped.
+    if ((await readKey(REFRESH_KEY)) === refreshToken) await clearSession();
     return null;
   }
 
@@ -180,7 +183,8 @@ function refreshSession(): Promise<string | null> {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { auth = true } = options;
 
-  let token = auth ? await readKey(ACCESS_KEY) : null;
+  const originalToken = auth ? await readKey(ACCESS_KEY) : null;
+  let token = originalToken;
   let res = await send(path, options, token);
 
   // Exactly one retry: an expired access token is the common case, and replaying the
@@ -193,7 +197,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const data = (await parse(res)) as { error?: { code: string; message: string } } | null;
 
   if (!res.ok) {
-    if (res.status === 401) await clearSession();
+    // Same guard as the refresh path: only drop the session if the token this request used
+    // is still the stored one. If a concurrent sign-in replaced it, keep the new session —
+    // this is what stops a leftover session's 401 from clobbering a fresh sign-in.
+    if (res.status === 401 && auth && (await readKey(ACCESS_KEY)) === originalToken) {
+      await clearSession();
+    }
     const err = data?.error ?? { code: 'unknown_error', message: 'Request failed.' };
     throw new ApiError(err.code, err.message, res.status);
   }
@@ -291,8 +300,14 @@ export type GeneratedQuiz = {
   generated_at: string;
 };
 
-export function generateQuiz(): Promise<GeneratedQuiz> {
-  return request<GeneratedQuiz>('/quiz/generate', { method: 'POST', body: {} });
+/**
+ * Generate a quiz. With no argument it draws on the learner's profile (grade + focus
+ * subjects); pass a `materialId` to generate from a specific imported material, which also
+ * makes the reward count toward that material's understanding (server-side, migration 0016).
+ */
+export function generateQuiz(opts?: { materialId?: string }): Promise<GeneratedQuiz> {
+  const body = opts?.materialId ? { source: 'material', material_id: opts.materialId } : {};
+  return request<GeneratedQuiz>('/quiz/generate', { method: 'POST', body });
 }
 
 export type QuizAnswer = { id: string; selected_index: number | null };
@@ -382,6 +397,19 @@ export type StatsSubject = {
   accuracy: number | null;
 };
 
+/** One imported material with how well it's been understood. `accuracy` is null until at
+ *  least one question drawn from it has been answered (migration 0016). */
+export type StatsMaterial = {
+  material_id: string;
+  title: string;
+  source_type: 'text' | 'link' | 'file';
+  preview: string;
+  correct: number;
+  total: number;
+  accuracy: number | null;
+  created_at: string;
+};
+
 /** One completed quiz. `total_count` is null for attempts recorded before the
  *  server started storing the denominator (migration 0014). */
 export type QuizAttempt = {
@@ -397,6 +425,8 @@ export type Stats = {
   streak: StatsStreak;
   daily: StatsDay[];
   subjects: StatsSubject[];
+  /** Every imported material with its per-material understanding. Newest first. */
+  materials: StatsMaterial[];
   /** Newest first, up to the 30 most recent attempts. */
   recent: QuizAttempt[];
 };
@@ -417,14 +447,46 @@ export function getStats(): Promise<Stats> {
 
 export type ImportedMaterial = {
   material_id: string;
-  source_type: 'text' | 'link';
+  title: string;
+  source_type: 'text' | 'link' | 'file';
   preview: string;
   created_at: string;
 };
 
-export function importText(rawText: string): Promise<ImportedMaterial> {
+/** Import pasted study material. An optional `title` names it in the Materials manager;
+ *  the server derives one from the text when it's omitted. */
+export function importText(rawText: string, title?: string): Promise<ImportedMaterial> {
   return request<ImportedMaterial>('/knowledge/import', {
     method: 'POST',
-    body: { source_type: 'text', raw_text: rawText },
+    body: { source_type: 'text', raw_text: rawText, ...(title ? { title } : {}) },
   });
+}
+
+/**
+ * Import an uploaded file (a PDF or a photo of a worksheet/page). The bytes travel as
+ * base64; the server transcribes the study text out of the file with the AI model and
+ * stores that text — so a file becomes an ordinary material the quiz engine can draw on.
+ * The request is larger and slower than a paste (the model has to read the file), so the
+ * caller should show a "reading your file" state while it runs.
+ */
+export function importFile(opts: {
+  data: string;
+  mimeType: string;
+  filename?: string;
+}): Promise<ImportedMaterial> {
+  return request<ImportedMaterial>('/knowledge/import', {
+    method: 'POST',
+    body: {
+      source_type: 'file',
+      data: opts.data,
+      mime_type: opts.mimeType,
+      ...(opts.filename ? { filename: opts.filename } : {}),
+    },
+  });
+}
+
+/** Delete an imported material. Its per-material understanding goes with it; quiz history
+ *  built while studying it is kept (the server nulls the link, not the row). */
+export function deleteMaterial(materialId: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/knowledge/${materialId}`, { method: 'DELETE' });
 }

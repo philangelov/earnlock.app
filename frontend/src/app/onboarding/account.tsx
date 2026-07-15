@@ -40,7 +40,9 @@ export default function AccountStep() {
   }, []);
 
   const googleReady = isGoogleConfigured();
-  const next = () => router.push('/material');
+  // Study material is no longer collected during onboarding — the last step is picking apps
+  // to lock. Materials are added afterwards from the Learn tab's Materials manager.
+  const next = () => router.push('/apps');
 
   const choose = async (provider: AccountProvider) => {
     haptic.press();

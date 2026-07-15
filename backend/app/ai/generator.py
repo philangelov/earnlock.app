@@ -44,8 +44,24 @@ logger = logging.getLogger(__name__)
 OPTION_COUNT = 4
 
 # Case-insensitive canonicalization, so a model that answers "math" still lands in the
-# same mastery bucket as one that answers "Math".
-_SUBJECT_LOOKUP = {s.lower(): s for s in VALID_SUBJECTS}
+# same mastery bucket as one that answers "Math". Built per-generation from the subjects
+# actually in play (predefined + the learner's custom ones), so a custom subject is
+# tracked like a built-in. This default covers callers that pass no subjects (the bank).
+_DEFAULT_SUBJECT_LOOKUP = {s.lower(): s for s in VALID_SUBJECTS}
+
+
+def _allowed_subjects(subjects: list[str] | None) -> list[str]:
+    """Subjects a question may be tagged with: the predefined set, plus any custom focus
+    subjects the learner picked — so a custom subject earns mastery like a built-in."""
+    allowed = list(VALID_SUBJECTS)
+    seen = {s.lower() for s in allowed}
+    for subject in subjects or []:
+        if isinstance(subject, str) and subject.strip():
+            name = subject.strip()
+            if name.lower() not in seen:
+                seen.add(name.lower())
+                allowed.append(name)
+    return allowed
 
 
 class GeneratorError(Exception):
@@ -93,24 +109,28 @@ def _clean_options(options) -> list[str]:
     return cleaned
 
 
-def _clean_subject(value) -> str | None:
-    """Canonicalize a generated subject, or None if it isn't one we track.
+def _clean_subject(value, lookup: dict) -> str | None:
+    """Canonicalize a generated subject against the in-play lookup, or None if unknown.
 
     Deliberately lenient: an unrecognised subject costs one row of mastery data, while
     raising here would throw away an otherwise perfectly good quiz.
     """
     if not isinstance(value, str):
         return None
-    return _SUBJECT_LOOKUP.get(value.strip().lower())
+    return lookup.get(value.strip().lower())
 
 
-def validate_questions(raw, count: int) -> list[dict]:
+def validate_questions(
+    raw, count: int, subject_lookup: dict | None = None
+) -> list[dict]:
     """Enforce the contract and normalize to internal quiz items.
 
     Returns exactly ``count`` items shaped
     ``{id, prompt, options[4], correct_index, concept, subject}`` (ids q1..qN).
-    Raises :class:`GeneratorError` on any violation.
+    ``subject_lookup`` maps lowercased→canonical for the subjects in play; defaults to
+    the predefined set. Raises :class:`GeneratorError` on any violation.
     """
+    lookup = subject_lookup if subject_lookup is not None else _DEFAULT_SUBJECT_LOOKUP
     if not isinstance(raw, list):
         raise GeneratorError("questions must be a list")
     if len(raw) < count:
@@ -150,7 +170,7 @@ def validate_questions(raw, count: int) -> list[dict]:
                 "options": options,
                 "correct_index": correct_index,
                 "concept": concept,
-                "subject": _clean_subject(question.get("subject")),
+                "subject": _clean_subject(question.get("subject"), lookup),
             }
         )
     return items
@@ -215,17 +235,21 @@ def validate_recap(raw) -> dict:
     }
 
 
-def validate_generation(raw, count: int) -> dict:
+def validate_generation(
+    raw, count: int, allowed_subjects: list[str] | None = None
+) -> dict:
     """Validate a whole generation into `{questions, recap}`.
 
     Questions are strict: a malformed set is rejected so the caller can retry or fall
     back. The recap is not worth a quiz — if the model botched it, we serve the offline
-    one and keep the questions it got right.
+    one and keep the questions it got right. ``allowed_subjects`` widens the canonical
+    set for this generation (predefined + custom); defaults to predefined.
     """
     if not isinstance(raw, dict):
         raise GeneratorError("generation must be an object with a 'questions' array")
 
-    questions = validate_questions(raw.get("questions"), count)
+    lookup = {s.lower(): s for s in (allowed_subjects or VALID_SUBJECTS)}
+    questions = validate_questions(raw.get("questions"), count, lookup)
 
     try:
         recap = validate_recap(raw.get("recap"))
@@ -272,47 +296,55 @@ class DummyQuestionGenerator:
         }
 
 
-_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "questions": {
-            "type": "array",
-            "items": {
+def _build_schema(allowed_subjects: list[str]) -> dict:
+    """The structured-output schema for one generation. The subject is an enum, not a
+    free string — mastery is only comparable across quizzes if every generator names a
+    subject the same way — but the enum is the subjects actually in play, so a learner's
+    custom subject is a valid tag rather than being coerced away."""
+    return {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string"},
+                        "options": {"type": "array", "items": {"type": "string"}},
+                        "correct_index": {"type": "integer"},
+                        "concept": {"type": "string"},
+                        "subject": {"type": "string", "enum": list(allowed_subjects)},
+                    },
+                    "required": [
+                        "prompt",
+                        "options",
+                        "correct_index",
+                        "concept",
+                        "subject",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
+            "recap": {
                 "type": "object",
                 "properties": {
-                    "prompt": {"type": "string"},
-                    "options": {"type": "array", "items": {"type": "string"}},
-                    "correct_index": {"type": "integer"},
-                    "concept": {"type": "string"},
-                    # An enum, not a free string: mastery is only comparable across
-                    # quizzes if every generator names the subject the same way.
-                    "subject": {"type": "string", "enum": list(VALID_SUBJECTS)},
+                    "sentence_before": {"type": "string"},
+                    "sentence_after": {"type": "string"},
+                    "answer": {"type": "string"},
+                    "distractors": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": [
-                    "prompt",
-                    "options",
-                    "correct_index",
-                    "concept",
-                    "subject",
+                    "sentence_before",
+                    "sentence_after",
+                    "answer",
+                    "distractors",
                 ],
                 "additionalProperties": False,
             },
         },
-        "recap": {
-            "type": "object",
-            "properties": {
-                "sentence_before": {"type": "string"},
-                "sentence_after": {"type": "string"},
-                "answer": {"type": "string"},
-                "distractors": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["sentence_before", "sentence_after", "answer", "distractors"],
-            "additionalProperties": False,
-        },
-    },
-    "required": ["questions", "recap"],
-    "additionalProperties": False,
-}
+        "required": ["questions", "recap"],
+        "additionalProperties": False,
+    }
 
 
 def _build_prompts(
@@ -322,6 +354,7 @@ def _build_prompts(
     material_text: str | None,
     locale: str,
 ) -> tuple[str, str]:
+    allowed = _allowed_subjects(subjects)
     system = (
         "You are an expert author of educational multiple-choice quizzes for children. "
         "You write clear, unambiguous, age-appropriate questions. Every question has "
@@ -355,7 +388,7 @@ def _build_prompts(
         f"Each item: a 'prompt', an 'options' array of exactly {OPTION_COUNT} distinct "
         "strings, a 'correct_index' pointing to the single correct option, a "
         "one-sentence 'concept', and a 'subject' — exactly one of: "
-        + ", ".join(VALID_SUBJECTS)
+        + ", ".join(allowed)
         + ". Pick the closest subject even when the question straddles two."
     )
     parts.append(
@@ -390,13 +423,19 @@ class ClaudeQuestionGenerator:
         system, user = _build_prompts(
             count, subjects, grade_or_age, material_text, locale
         )
+        schema = _build_schema(_allowed_subjects(subjects))
+        # Budget headroom per question (prompt + 4 options + concept + subject) plus the
+        # recap. Too low a cap truncates the JSON on a longer (debt-mode) quiz, which
+        # fails validation and silently falls back to the offline bank, not the
+        # material.
+        max_tokens = min(8000, 600 * count + 1200)
         try:
             response = self._client.messages.create(
                 model=self._model,
-                max_tokens=2000,
+                max_tokens=max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": user}],
-                output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
+                output_config={"format": {"type": "json_schema", "schema": schema}},
             )
         except anthropic.APIError as exc:  # network / auth / rate-limit / 5xx
             raise GeneratorError(f"Claude API call failed: {exc}") from exc
@@ -456,7 +495,7 @@ def generate_quiz(
                 material_text=material_text,
                 locale=locale,
             )
-            return validate_generation(raw, count)
+            return validate_generation(raw, count, _allowed_subjects(subjects))
         except GeneratorError as exc:
             last_error = exc
             logger.warning(

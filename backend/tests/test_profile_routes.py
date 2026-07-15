@@ -40,9 +40,20 @@ def test_subjects_reject_empty():
         validate_focus_subjects([])
 
 
-def test_subjects_reject_unknown():
+def test_subjects_accept_custom_kept_as_typed():
+    # Custom subjects are first-class: an unrecognised one is kept as typed,
+    # a recognised one is canonicalised to its predefined casing.
+    assert validate_focus_subjects(["Astrology", "math"]) == ["Astrology", "Math"]
+
+
+def test_subjects_reject_blank_entries():
     with pytest.raises(ValidationError):
-        validate_focus_subjects(["Math", "Astrology"])
+        validate_focus_subjects(["   "])
+
+
+def test_subjects_reject_too_many():
+    with pytest.raises(ValidationError):
+        validate_focus_subjects([f"Subject {i}" for i in range(31)])
 
 
 def test_subjects_canonicalise_and_dedupe():
@@ -104,10 +115,24 @@ def test_get_profile_404_when_missing(client, auth_headers):
     assert res.get_json()["error"]["code"] == "not_found"
 
 
-def test_put_profile_rejects_bad_subject(client, auth_headers):
-    res = client.put(
-        "/profile", headers=auth_headers, json={"focus_subjects": ["Wizardry"]}
-    )
+def test_put_profile_accepts_custom_subject(client, auth_headers):
+    updated = {**_PROFILE_ROW, "focus_subjects": ["Wizardry"]}
+    with (
+        patch(f"{SVC}.update_user_grade"),
+        patch(f"{SVC}.update_profile_subjects") as up_prof,
+        patch(f"{SVC}.get_user_grade", return_value="5th grade"),
+        patch(f"{SVC}.get_profile_row", return_value=updated),
+    ):
+        res = client.put(
+            "/profile", headers=auth_headers, json={"focus_subjects": ["Wizardry"]}
+        )
+    assert res.status_code == 200
+    up_prof.assert_called_once_with(USER_ID, ["Wizardry"])
+    assert res.get_json()["focus_subjects"] == ["Wizardry"]
+
+
+def test_put_profile_rejects_blank_subject(client, auth_headers):
+    res = client.put("/profile", headers=auth_headers, json={"focus_subjects": ["   "]})
     assert res.status_code == 400
     assert res.get_json()["error"]["code"] == "validation_error"
 

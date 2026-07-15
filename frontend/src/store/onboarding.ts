@@ -24,8 +24,9 @@ import type { SymName } from '@/components/Sym';
 /**
  * The linear first-run flow, in order. `greeting` and `calculating` are intentionally absent:
  * they're interstitials with no header, so they neither show nor advance the progress bar.
- * `material` and `apps` are the last two steps and live at the app root because Profile
- * reuses them as edit screens.
+ * `apps` is the last step and lives at the app root because Profile reuses it as an edit
+ * screen. Study material is NOT collected here anymore — it's added after onboarding from the
+ * Learn tab's Materials manager, so the first run stays focused on the deal (earn to unlock).
  */
 export const ONBOARD_STEPS = [
   'usage',
@@ -39,7 +40,6 @@ export const ONBOARD_STEPS = [
   'reveal',
   'notifications',
   'account',
-  'material',
   'apps',
 ] as const;
 

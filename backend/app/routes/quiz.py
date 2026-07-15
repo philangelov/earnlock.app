@@ -74,6 +74,7 @@ def generate_quiz():
     # Resolve the generation context from the requested source.
     subjects = None
     material_text = None
+    material_id = None
     grade_or_age, subjects = _profile_context(g.user_id)
 
     if source == "material":
@@ -103,7 +104,7 @@ def generate_quiz():
         locale=locale,
     )
     questions = generated["questions"]
-    quiz_id = quiz_repo.create_quiz(g.user_id, questions)
+    quiz_id = quiz_repo.create_quiz(g.user_id, questions, material_id)
     return jsonify(
         {
             "quiz_id": quiz_id,
