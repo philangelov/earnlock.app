@@ -12,7 +12,7 @@ import { TabScreen } from '@/components/TabScreen';
 import { discardAvatar, pickAvatar } from '@/lib/avatar';
 import { haptic } from '@/lib/haptics';
 import { useScreenTime } from '@/lib/screenTime/store';
-import { SUBJECT_DEFS } from '@/store/content';
+import { chosenCount } from '@/store/content';
 import { useStats } from '@/store/stats';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
@@ -65,7 +65,7 @@ export default function ProfileScreen() {
     }, [fetchStats]),
   );
 
-  const subjectCount = SUBJECT_DEFS.filter((s) => subj[s.key]).length;
+  const subjectCount = chosenCount(subj);
 
   // No demo learner to fall back on: an unnamed account is simply "Learner", and the
   // avatar wears a person glyph rather than someone else's initials.
@@ -79,6 +79,7 @@ export default function ProfileScreen() {
     : null;
 
   const accuracy = stats?.totals.accuracy;
+  const materialCount = stats?.materials?.length ?? 0;
 
   const stConnected = status === 'approved';
   const stValue = !available
@@ -308,7 +309,8 @@ export default function ProfileScreen() {
           iconColor={t.onIcon}
           iconBg={t.iconTeal}
           title="Study material"
-          onPress={() => router.push('/material')}
+          value={materialCount > 0 ? `${materialCount}` : undefined}
+          onPress={() => router.push('/materials')}
           showChevron
         />
       </ListGroup>

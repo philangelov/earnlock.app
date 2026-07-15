@@ -14,7 +14,7 @@ import { StepHeader } from '@/components/StepHeader';
 import { SubjectChips } from '@/components/SubjectChips';
 import { Sym } from '@/components/Sym';
 import { haptic } from '@/lib/haptics';
-import { SUBJECT_DEFS } from '@/store/content';
+import { allSubjects, chosenCount } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -29,8 +29,10 @@ export default function SetupScreen() {
   const gradeDown = useEarnLock((s) => s.gradeDown);
   const subj = useEarnLock((s) => s.subj);
   const toggleSubj = useEarnLock((s) => s.toggleSubj);
+  const customSubjects = useEarnLock((s) => s.customSubjects);
+  const addCustomSubject = useEarnLock((s) => s.addCustomSubject);
 
-  const chosen = SUBJECT_DEFS.filter((s) => subj[s.key]).length;
+  const chosen = chosenCount(subj);
 
   return (
     <Screen
@@ -67,7 +69,12 @@ export default function SetupScreen() {
 
       {/* Subjects */}
       <SectionHeader title={`Subjects · ${chosen} chosen`} style={styles.sectionHeader} />
-      <SubjectChips selected={subj} onToggle={toggleSubj} />
+      <SubjectChips
+        subjects={allSubjects(customSubjects)}
+        selected={subj}
+        onToggle={toggleSubj}
+        onAddCustom={addCustomSubject}
+      />
     </Screen>
   );
 }

@@ -27,6 +27,17 @@ class Config:
     QUIZ_GEN_RETRIES = int(os.getenv("QUIZ_GEN_RETRIES", "1"))
     # Cap on stored study text per imported material (POST /knowledge/import).
     KNOWLEDGE_MAX_CHARS = int(os.getenv("KNOWLEDGE_MAX_CHARS", "12000"))
+    # Uploaded material files (source_type=file): the max decoded file size accepted,
+    # and the output budget for transcribing it to text (app/ai/extractor.py). A
+    # worksheet or a photo of a page sits well under 7 MB; the model reads it to text.
+    KNOWLEDGE_FILE_MAX_BYTES = int(os.getenv("KNOWLEDGE_FILE_MAX_BYTES", "7000000"))
+    KNOWLEDGE_EXTRACT_MAX_TOKENS = int(
+        os.getenv("KNOWLEDGE_EXTRACT_MAX_TOKENS", "8000")
+    )
+    # Only the first N pages of an uploaded PDF are read. The model caps PDFs at 100
+    # pages, and the stored text is capped at KNOWLEDGE_MAX_CHARS anyway (a couple dozen
+    # pages fills it), so a long lecture deck still works instead of erroring.
+    KNOWLEDGE_PDF_MAX_PAGES = int(os.getenv("KNOWLEDGE_PDF_MAX_PAGES", "20"))
     # Bounds on server-side link fetching (issue #12): a slow/huge page must not hang or
     # blow up memory on a request thread.
     KNOWLEDGE_FETCH_TIMEOUT_SECONDS = float(
@@ -34,8 +45,10 @@ class Config:
     )
     KNOWLEDGE_FETCH_MAX_BYTES = int(os.getenv("KNOWLEDGE_FETCH_MAX_BYTES", "2000000"))
     # Global request body cap (Flask reads this key name automatically) — protects every
-    # endpoint, not just Knowledge Import, from oversized payloads.
-    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", "1000000"))
+    # endpoint from oversized payloads. Sized to admit a base64-encoded material file
+    # (KNOWLEDGE_FILE_MAX_BYTES ~7 MB inflates ~33% + JSON overhead); the file endpoint
+    # additionally rejects anything over the decoded byte cap.
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", "12000000"))
     # Wake-Up Lock (issue #8) — informational for the client (GET /wakeup/status);
     # the questions themselves are generated via the normal POST /quiz/generate.
     WAKEUP_QUESTIONS = int(os.getenv("WAKEUP_QUESTIONS", "3"))

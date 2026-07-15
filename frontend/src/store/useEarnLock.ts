@@ -16,13 +16,24 @@
  * else (auth, quiz generate+submit, screentime balance, knowledge import) is real.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+// The legacy entry point is where base64 file reads live in SDK 57 — the new File API
+// exposes arrayBuffer()/text() but no base64 helper, and we need base64 to hand the file
+// to the backend (which forwards it straight to the model). This import is the sanctioned
+// way to keep that one call.
+import { readAsStringAsync } from 'expo-file-system/legacy';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import * as api from '@/lib/api';
 import { getIdentityToken, SignInError } from '@/lib/auth';
 
-import { PASTE_EXAMPLE, SUBJECT_DEFS, type SubjectKey } from './content';
+import {
+  chosenSubjects,
+  normalizeSubject,
+  PASTE_EXAMPLE,
+  SUBJECT_DEFS,
+  type SubjectKey,
+} from './content';
 import {
   AGE_DEFAULT,
   gradeForAge,
@@ -64,12 +75,21 @@ export type EarnLockState = {
   commitment: CommitmentKey | null;
   notificationsGranted: boolean;
   grade: number;
+  /** Which subjects are switched on. Keys are subject names — predefined or custom. */
   subj: Record<SubjectKey, boolean>;
+  /** Custom subjects the learner typed in, so they persist as pickable chips. */
+  customSubjects: string[];
   importText: string;
-  imported: boolean;
   importLoading: boolean;
   importError: string | null;
+  /** A chosen file to upload (PDF/photo). `uploadName` is its display name; the bytes are
+   *  sent as base64 — either read from `uploadUri` at submit time (a picked document) or
+   *  already in hand as `uploadData` (a photo, which the picker hands back as JPEG base64).
+   *  Transient — not persisted. */
   uploadName: string;
+  uploadUri: string | null;
+  uploadData: string | null;
+  uploadMime: string | null;
   /** Real quiz fetched from POST /quiz/generate; null until beginQuiz() resolves. */
   quizId: string | null;
   quizQuestions: api.QuizQuestion[];
@@ -111,14 +131,20 @@ export type EarnLockState = {
   gradeUp: () => void;
   gradeDown: () => void;
   toggleSubj: (key: SubjectKey) => void;
+  /** Add a learner-typed subject (normalised, de-duped) and switch it on. */
+  addCustomSubject: (name: string) => void;
   setImportText: (text: string) => void;
   pasteExample: () => void;
-  setUploadName: (name: string) => void;
+  /** Record (or clear) the chosen file. Provide `uri` (read at submit) or `data` (base64
+   *  already in hand). Pass null to clear the selection. */
+  setUpload: (file: { uri?: string; data?: string; name: string; mimeType: string } | null) => void;
   doImport: () => Promise<boolean>;
   completeOnboarding: () => void;
 
   // quiz flow
-  beginQuiz: () => Promise<boolean>;
+  /** Start a quiz. Pass a materialId to draw questions from that material and credit its
+   *  understanding; omit it for a profile quiz (grade + focus subjects). */
+  beginQuiz: (materialId?: string) => Promise<boolean>;
   pick: (index: number) => void;
   nextQuestion: () => void;
   submitQuizNow: () => Promise<boolean>;
@@ -160,11 +186,14 @@ const initial = {
     Geography: false,
     Coding: false,
   } as Record<SubjectKey, boolean>,
+  customSubjects: [] as string[],
   importText: '',
-  imported: false,
   importLoading: false,
   importError: null as string | null,
   uploadName: '',
+  uploadUri: null as string | null,
+  uploadData: null as string | null,
+  uploadMime: null as string | null,
   quizId: null as string | null,
   quizQuestions: [] as api.QuizQuestion[],
   quizRecap: null as api.QuizRecap | null,
@@ -207,8 +236,8 @@ export const useEarnLock = create<EarnLockState>()(
           // The id_token grant carries no signup metadata, so a fresh account's grade is
           // 'unspecified' until we say otherwise. Onboarding already knows it. Best-effort:
           // a failure here must not undo a sign-in that actually succeeded.
-          const { grade, subj } = get();
-          const focus = SUBJECT_DEFS.filter((s) => subj[s.key]).map((s) => s.key);
+          const { grade, subj, customSubjects } = get();
+          const focus = chosenSubjects(subj, customSubjects);
           try {
             await api.updateProfile({
               grade_or_age: gradeLabel(grade),
@@ -220,10 +249,17 @@ export const useEarnLock = create<EarnLockState>()(
 
           return true;
         } catch (err) {
-          // `fetch` rejects with a bare TypeError when the request never reached a server at
-          // all — wrong host, backend down. Left in the generic branch it reads as "the
-          // provider refused you", which is the one thing it does not mean.
-          const unreachable = err instanceof TypeError;
+          // The real error is otherwise swallowed into a fixed string, which made a
+          // can't-reach-the-server failure indistinguishable from a provider refusal.
+          if (__DEV__) console.error('[signIn] failed', err);
+
+          // `fetch` rejects when the request never reached a server at all — wrong host,
+          // backend down. That rejection is a bare TypeError on some RN builds and an Error
+          // whose message is "Network request failed" on others; match both, or it reads as
+          // "the provider refused you", which is the one thing it does not mean.
+          const netMessage = err instanceof Error ? err.message : '';
+          const unreachable =
+            err instanceof TypeError || /network request failed/i.test(netMessage);
           const message =
             err instanceof api.ApiError || err instanceof SignInError
               ? err.message
@@ -277,29 +313,80 @@ export const useEarnLock = create<EarnLockState>()(
       gradeUp: () => set((s) => ({ grade: Math.min(12, s.grade + 1) })),
       gradeDown: () => set((s) => ({ grade: Math.max(1, s.grade - 1) })),
       toggleSubj: (key) => set((s) => ({ subj: { ...s.subj, [key]: !s.subj[key] } })),
-      // Editing the inputs invalidates a previous "questions ready" result.
-      setImportText: (importText) => set({ importText, imported: false }),
-      pasteExample: () => set({ importText: PASTE_EXAMPLE, imported: false }),
-      setUploadName: (uploadName) => set({ uploadName, imported: false }),
-      // A picked file (PDF/image) has no backend counterpart — /knowledge/import only
-      // accepts pasted text or a URL — so a file selection stays presentational-only.
-      // Pasted text is real: it's sent to POST /knowledge/import and stored server-side.
+      addCustomSubject: (name) =>
+        set((s) => {
+          const clean = normalizeSubject(name);
+          if (!clean) return {};
+          const lower = clean.toLowerCase();
+          // Typing a name that already exists (predefined or custom, any casing) just
+          // switches that one on rather than creating a near-duplicate chip.
+          const predefined = SUBJECT_DEFS.find((d) => d.key.toLowerCase() === lower);
+          if (predefined) return { subj: { ...s.subj, [predefined.key]: true } };
+          const existing = s.customSubjects.find((c) => c.toLowerCase() === lower);
+          if (existing) return { subj: { ...s.subj, [existing]: true } };
+          return {
+            subj: { ...s.subj, [clean]: true },
+            customSubjects: [...s.customSubjects, clean],
+          };
+        }),
+      setImportText: (importText) => set({ importText }),
+      pasteExample: () => set({ importText: PASTE_EXAMPLE }),
+      setUpload: (file) =>
+        set({
+          uploadName: file?.name ?? '',
+          uploadUri: file?.uri ?? null,
+          uploadData: file?.data ?? null,
+          uploadMime: file?.mimeType ?? null,
+          importError: null,
+        }),
+      // Two real upload paths now:
+      //   - a picked file (PDF/photo): its bytes are read as base64 and POSTed to
+      //     /knowledge/import as source_type=file; the server transcribes the text.
+      //   - pasted text: POSTed as source_type=text.
+      // A file wins over stray text if both are present (the file is the deliberate action).
       doImport: async () => {
-        const { importText, uploadName, authed } = get();
-        if (!importText.trim()) {
-          set({ imported: uploadName.length > 0 });
-          return uploadName.length > 0;
-        }
-        // Skipped sign-in: /knowledge/import needs a session. Keep the text locally so
-        // onboarding can finish, rather than dead-ending on a 401 the user can't act on.
+        const { importText, uploadUri, uploadData, uploadMime, uploadName, authed } = get();
+        const hasFile = !!(uploadUri || uploadData);
+        const hasText = importText.trim().length > 0;
+        if (!hasFile && !hasText) return false;
+
         if (!authed) {
-          set({ imported: true, importError: null });
+          // A file must go through the server (it can't be transcribed on-device), so it
+          // can't be kept locally the way pasted text can. Ask the user to sign in.
+          if (hasFile) {
+            set({ importError: 'Sign in to add materials to your account.' });
+            return false;
+          }
+          // Pasted text with no session: keep it in the form rather than dead-ending on a
+          // 401 the user can't act on.
+          set({ importError: null });
           return true;
         }
+
         set({ importLoading: true, importError: null });
         try {
-          await api.importText(importText);
-          set({ imported: true, importLoading: false });
+          if (hasFile) {
+            const data =
+              uploadData ?? (await readAsStringAsync(uploadUri!, { encoding: 'base64' }));
+            await api.importFile({
+              data,
+              mimeType: uploadMime ?? 'application/octet-stream',
+              filename: uploadName || undefined,
+            });
+          } else {
+            await api.importText(importText);
+          }
+          // Clear the form on success. This is a REPEATABLE "Add material" form (reopened
+          // from the Materials manager), so leaving the input in place would re-submit it —
+          // a duplicate — on the next visit.
+          set({
+            importLoading: false,
+            importText: '',
+            uploadName: '',
+            uploadUri: null,
+            uploadData: null,
+            uploadMime: null,
+          });
           return true;
         } catch (err) {
           const message = err instanceof api.ApiError ? err.message : 'Could not save that.';
@@ -309,7 +396,7 @@ export const useEarnLock = create<EarnLockState>()(
       },
       completeOnboarding: () => set({ onboarded: true }),
 
-      beginQuiz: async () => {
+      beginQuiz: async (materialId) => {
         // Every quiz is graded and rewarded server-side, so there is nothing to show a
         // signed-out user. Say so instead of surfacing a bare 401.
         if (!get().authed) {
@@ -318,7 +405,7 @@ export const useEarnLock = create<EarnLockState>()(
         }
         set({ quizLoading: true, quizError: null, quizResults: null });
         try {
-          const quiz = await api.generateQuiz();
+          const quiz = await api.generateQuiz(materialId ? { materialId } : undefined);
           set({
             quizId: quiz.quiz_id,
             quizQuestions: quiz.questions,
@@ -363,15 +450,19 @@ export const useEarnLock = create<EarnLockState>()(
         set({ quizLoading: true, quizError: null });
         try {
           const res = await api.submitQuiz(quizId, answers);
-          set((s) => ({
+          set({
             quizResults: res.results,
             lastEarnedSeconds: res.earned_seconds,
             quizLoading: false,
             // The balance is server-authoritative from here — replace, don't stack.
             unlockUntil: Date.now() + res.new_balance_seconds * 1000,
-            debt: res.sos_debt_cleared ? false : s.debt,
-            sosUsed: res.sos_debt_cleared ? false : s.sosUsed,
-          }));
+            // SOS is a local-only mechanic (there is no /sos endpoint), so its debt and
+            // daily allowance can't be cleared by the server. A completed lesson repays the
+            // debt and refreshes the allowance — matching the SOS sheet's own promise — which
+            // also stops both from getting permanently stuck on a flag that never flips.
+            debt: false,
+            sosUsed: false,
+          });
           return true;
         } catch (err) {
           const message = err instanceof api.ApiError ? err.message : 'Could not submit.';
@@ -449,9 +540,8 @@ export const useEarnLock = create<EarnLockState>()(
         notificationsGranted: s.notificationsGranted,
         grade: s.grade,
         subj: s.subj,
+        customSubjects: s.customSubjects,
         importText: s.importText,
-        imported: s.imported,
-        uploadName: s.uploadName,
         unlockUntil: s.unlockUntil,
         sosUsed: s.sosUsed,
         debt: s.debt,

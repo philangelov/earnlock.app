@@ -8,7 +8,7 @@
  * A 0.97 press-scale + medium haptic on press. `disabled` renders the muted fill (no haptic).
  */
 import type { ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
 import { haptic } from '@/lib/haptics';
 import { Radius } from '@/theme/tokens';
@@ -24,6 +24,8 @@ export type ButtonProps = {
   variant?: ButtonVariant;
   /** Optional leading SF Symbol element (already colored to match `fg`). */
   icon?: ReactNode;
+  /** Show a spinner in place of the icon and swallow presses while a task runs. */
+  loading?: boolean;
   /** Compact height for inline / secondary placements. */
   small?: boolean;
   style?: ViewStyle;
@@ -35,6 +37,7 @@ export function Button({
   disabled,
   variant = 'filled',
   icon,
+  loading,
   small,
   style,
 }: ButtonProps) {
@@ -47,9 +50,10 @@ export function Button({
     danger: { bg: t.danger, fg: t.onDanger },
   };
   const { bg, fg } = disabled ? { bg: t.fill, fg: t.text3 } : palette[variant];
+  const blocked = !!disabled || !!loading;
 
   const handlePress = () => {
-    if (disabled) return;
+    if (blocked) return;
     haptic.press();
     onPress?.();
   };
@@ -57,17 +61,21 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ disabled: !!disabled }}
+      accessibilityState={{ disabled: blocked, busy: !!loading }}
       onPress={handlePress}
-      disabled={disabled}
+      disabled={blocked}
       style={({ pressed }) => [
         styles.base,
         { backgroundColor: bg, paddingVertical: small ? 13 : 16.5 },
-        pressed && !disabled && styles.pressed,
+        pressed && !blocked && styles.pressed,
         style,
       ]}
     >
-      {icon != null && <View>{icon}</View>}
+      {loading ? (
+        <ActivityIndicator size="small" color={fg} />
+      ) : (
+        icon != null && <View>{icon}</View>
+      )}
       <Text style={[small ? Type.subheadStrong : Type.headline, { color: fg }]}>{label}</Text>
     </Pressable>
   );

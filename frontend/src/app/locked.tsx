@@ -22,6 +22,14 @@ export default function LockedScreen() {
     router.replace('/quiz');
   };
 
+  // The shield deep-links here on a cold launch, so there may be no back stack to pop —
+  // fall back to the Today tab rather than dead-ending on a no-op back.
+  const dismiss = () => {
+    haptic.tap();
+    if (router.canGoBack()) router.back();
+    else router.replace('/today');
+  };
+
   return (
     <View
       style={[
@@ -37,10 +45,7 @@ export default function LockedScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Close"
-          onPress={() => {
-            haptic.tap();
-            router.back();
-          }}
+          onPress={dismiss}
           hitSlop={12}
           style={[styles.close, { backgroundColor: t.fill }]}
         >
@@ -74,10 +79,7 @@ export default function LockedScreen() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Maybe later"
-          onPress={() => {
-            haptic.tap();
-            router.back();
-          }}
+          onPress={dismiss}
           style={({ pressed }) => [styles.later, pressed && { opacity: 0.6 }]}
         >
           <Text style={[Type.calloutStrong, { color: t.text2 }]}>Maybe later</Text>

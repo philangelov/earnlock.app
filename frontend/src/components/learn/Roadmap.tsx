@@ -271,7 +271,13 @@ const PathNode = memo(function PathNode({
               borderColor: palette.border,
               borderWidth: active ? 3 : 0,
             },
+            // Light mode lifts nodes with a soft drop shadow. On a black page a dark
+            // shadow is invisible, so dark mode lifts them with an on-brand lime glow —
+            // strongest on the active node, which is the "you are here" the user asked to
+            // stand out. Completed lime nodes get a faint halo so the walked path glows too.
             node.state !== 'locked' && !dark && styles.discRaised,
+            dark && active && styles.discGlowActive,
+            dark && node.state === 'done' && styles.discGlowDone,
             pressed && styles.discPressed,
           ]}
         >
@@ -336,6 +342,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   discRaised: { boxShadow: '0px 4px 12px rgba(12,12,20,0.16)' },
+  // Dark-mode elevation is a lime glow (a dark shadow would vanish against #000).
+  discGlowActive: { boxShadow: '0px 6px 22px rgba(203,255,69,0.34)' },
+  discGlowDone: { boxShadow: '0px 4px 16px rgba(203,255,69,0.20)' },
   discPressed: { transform: [{ scale: 0.94 }] },
   lip: {
     position: 'absolute',

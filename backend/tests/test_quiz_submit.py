@@ -25,12 +25,13 @@ def fake_db(monkeypatch):
     """
     state = {"quizzes": {}, "debt": {}, "balance": {}, "subjects": {}, "history": []}
 
-    def create_quiz(user_id, questions):
+    def create_quiz(user_id, questions, material_id=None):
         quiz_id = str(uuid.uuid4())
         state["quizzes"][quiz_id] = {
             "id": quiz_id,
             "user_id": user_id,
             "questions": questions,
+            "material_id": material_id,
             "submitted_at": None,
         }
         return quiz_id

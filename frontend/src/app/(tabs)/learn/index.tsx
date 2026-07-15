@@ -1,15 +1,17 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo } from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { Card } from '@/components/Card';
+import { Meter } from '@/components/charts/Meter';
 import { Roadmap, type Chapter, type RoadmapNode } from '@/components/learn/Roadmap';
+import { SectionHeader } from '@/components/List';
 import { StatGlyph, type StatRole } from '@/components/StatGlyph';
 import { Sym } from '@/components/Sym';
 import { TabScreen } from '@/components/TabScreen';
 import type { QuizAttempt } from '@/lib/api';
 import { useStats } from '@/store/stats';
-import { CHAPTER_SIZE, SUBJECT_DEFS } from '@/store/content';
+import { CHAPTER_SIZE, chosenSubjects, subjectIcon } from '@/store/content';
 import { useEarnLock } from '@/store/useEarnLock';
 import { Radius, Space } from '@/theme/tokens';
 import { Type } from '@/theme/type';
@@ -30,7 +32,8 @@ function focusLabel(subjects: string[]): string {
  * Positions are global: the newest attempt sits at index `completed - 1`, so a chapter
  * number stays correct even though the server only sends back the most recent attempts.
  * The active node is always at `completed % CHAPTER_SIZE` of the current chapter — it is
- * literally the next quiz `/quiz/generate` will produce.
+ * literally the next quiz `/quiz/generate` will produce. The path has no ceiling: a new
+ * node every quiz, a new chapter every five, for as long as the learner keeps going.
  */
 function buildChapters(completed: number, recent: QuizAttempt[], focus: string): Chapter[] {
   const attemptAt = new Map<number, QuizAttempt>();
@@ -101,6 +104,7 @@ export default function LearnScreen() {
   const { width } = useWindowDimensions();
 
   const subj = useEarnLock((s) => s.subj);
+  const customSubjects = useEarnLock((s) => s.customSubjects);
   const resetQuizFlow = useEarnLock((s) => s.resetQuizFlow);
 
   const stats = useStats((s) => s.data);
@@ -119,8 +123,8 @@ export default function LearnScreen() {
   }, [resetQuizFlow, router]);
 
   const focus = useMemo(
-    () => focusLabel(SUBJECT_DEFS.filter((s) => subj[s.key]).map((s) => s.key)),
-    [subj],
+    () => focusLabel(chosenSubjects(subj, customSubjects)),
+    [subj, customSubjects],
   );
 
   const completed = stats?.totals.quizzes ?? 0;
@@ -131,6 +135,8 @@ export default function LearnScreen() {
 
   const trailWidth = width - Space.xl * 2;
   const accuracy = stats?.totals.accuracy;
+  const subjects = stats?.subjects ?? [];
+  const materials = stats?.materials ?? [];
 
   return (
     <TabScreen
@@ -161,6 +167,91 @@ export default function LearnScreen() {
           </Text>
         </Card>
       )}
+
+      {/* Subject mastery — how well each subject is understood, from real quiz results. */}
+      {subjects.length > 0 && (
+        <View>
+          <SectionHeader title="Subjects" />
+          <Card style={styles.masteryCard}>
+            {subjects.map((s, i) => (
+              <View key={s.subject} style={styles.masteryRow}>
+                <Sym name={subjectIcon(s.subject)} size={15} color={t.text2} />
+                <View style={{ flex: 1 }}>
+                  <Meter
+                    label={s.subject}
+                    value={s.accuracy != null ? `${Math.round(s.accuracy * 100)}%` : '—'}
+                    fraction={s.accuracy ?? 0}
+                    delay={i * 60}
+                    labelWidth={96}
+                  />
+                </View>
+              </View>
+            ))}
+          </Card>
+        </View>
+      )}
+
+      {/* Materials — understanding per imported material, with the full manager one tap away. */}
+      <View>
+        <SectionHeader
+          title="Materials"
+          trailing={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Manage materials"
+              hitSlop={8}
+              onPress={() => router.push('/materials')}
+            >
+              <Text style={[Type.footnoteStrong, { color: t.accentText }]}>
+                {materials.length > 0 ? 'Manage' : 'Add'}
+              </Text>
+            </Pressable>
+          }
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open materials"
+          onPress={() => router.push('/materials')}
+          style={({ pressed }) => pressed && { opacity: 0.85 }}
+        >
+          <Card style={styles.materialsCard}>
+            {materials.length === 0 ? (
+              <View style={styles.materialEmpty}>
+                <View style={[styles.icon, { backgroundColor: t.fill }]}>
+                  <Sym name="doc.text.fill" size={18} color={t.text2} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[Type.headline, { color: t.text }]}>Study your own notes</Text>
+                  <Text style={[Type.footnote, { color: t.text3, marginTop: 1 }]}>
+                    Add a chapter and track how well you understand it.
+                  </Text>
+                </View>
+                <Sym name="plus" size={16} color={t.text3} weight="semibold" />
+              </View>
+            ) : (
+              materials.slice(0, 3).map((m) => {
+                const pct = m.total > 0 && m.accuracy != null ? Math.round(m.accuracy * 100) : null;
+                return (
+                  <View key={m.material_id} style={styles.materialRow}>
+                    <View style={[styles.dot, { backgroundColor: t.accent }]} />
+                    <Text style={[Type.subhead, { color: t.text, flex: 1 }]} numberOfLines={1}>
+                      {m.title || m.preview || 'Untitled'}
+                    </Text>
+                    <Text style={[Type.footnoteStrong, { color: pct != null ? t.text2 : t.text3 }]}>
+                      {pct != null ? `${pct}%` : 'New'}
+                    </Text>
+                  </View>
+                );
+              })
+            )}
+            {materials.length > 3 && (
+              <Text style={[Type.footnote, { color: t.text3 }]}>
+                +{materials.length - 3} more in Materials
+              </Text>
+            )}
+          </Card>
+        </Pressable>
+      </View>
     </TabScreen>
   );
 }
@@ -209,4 +300,20 @@ const styles = StyleSheet.create({
     gap: 10,
     padding: Space.lg,
   },
+
+  masteryCard: { padding: Space.lg, gap: Space.md },
+  masteryRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+
+  materialsCard: { padding: Space.lg, gap: Space.md },
+  materialEmpty: { flexDirection: 'row', alignItems: 'center', gap: Space.md },
+  icon: {
+    width: 38,
+    height: 38,
+    borderRadius: Radius.control,
+    borderCurve: 'continuous',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  materialRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dot: { width: 7, height: 7, borderRadius: 4 },
 });

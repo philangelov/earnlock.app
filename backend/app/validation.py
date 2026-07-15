@@ -9,17 +9,20 @@ accepted here at all: per the API contract they are "ignored if sent", so the ca
 simply never forwards them to the DB layer.
 """
 
+import base64
+import binascii
 import re
 import uuid
 
 from app.text_extraction import is_valid_http_url
 
 # --- Focus subjects -------------------------------------------------------------
-# Canonical set from docs/api-contract.md §3. Stored with this exact casing.
-# Must stay in step with the subjects the app actually offers (SUBJECT_DEFS in
-# frontend/src/store/content.ts) — anything the picker shows but this rejects turns a
-# perfectly ordinary selection into a 400 on PUT /profile. The generator only
-# interpolates these names into its prompt, so the list is free to grow.
+# The PREDEFINED subjects the app offers up front (SUBJECT_DEFS in
+# frontend/src/store/content.ts). This is no longer a whitelist: a learner may study
+# ANY subject, and both `profiles.focus_subjects` (text[]) and `subject_stats` (text PK)
+# key on free text, so a custom subject earns and tracks like a built-in. The set is
+# used only to canonicalise the CASING of recognised subjects and to seed the
+# generator's subject enum. Keep roughly in step with the app's predefined list.
 VALID_SUBJECTS = (
     "Math",
     "History",
@@ -29,8 +32,30 @@ VALID_SUBJECTS = (
     "Chemistry",
     "Geography",
     "Coding",
+    "Literature",
+    "Computer Science",
+    "Economics",
+    "Art",
+    "Music",
+    "Languages",
+    "Psychology",
+    "Astronomy",
+    "Health",
+    "Statistics",
 )
 _SUBJECT_LOOKUP = {s.lower(): s for s in VALID_SUBJECTS}
+
+# Bounds on free-text subjects — keep junk and abuse off the wire. The per-subject cap
+# matches the app's normalizeSubject() (frontend/src/store/content.ts).
+_MAX_SUBJECT_LEN = 40
+_MAX_SUBJECTS = 30
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize_subject(value: str) -> str:
+    """Trim, collapse inner whitespace, cap length. Mirrors the client's normaliser."""
+    return _WHITESPACE_RE.sub(" ", value).strip()[:_MAX_SUBJECT_LEN]
+
 
 # --- Grade / age ----------------------------------------------------------------
 # Realistic boundaries. NOTE: api-contract.md says only "a recognised grade/age" and
@@ -71,7 +96,13 @@ def is_valid_uuid(value: str) -> bool:
 
 
 def validate_focus_subjects(value):
-    """Return a canonicalised, de-duplicated subject list or raise ValidationError."""
+    """Return a canonicalised, de-duplicated subject list or raise ValidationError.
+
+    Any non-empty subject is accepted (custom subjects are first-class). A recognised
+    name is canonicalised to its predefined casing so "math"/"MATH" land in one bucket;
+    an unrecognised one is kept as the learner typed it (normalised). De-dup is
+    case-insensitive.
+    """
     if not isinstance(value, list):
         raise ValidationError("focus_subjects must be an array of strings.")
     if not value:
@@ -82,14 +113,18 @@ def validate_focus_subjects(value):
     for item in value:
         if not isinstance(item, str):
             raise ValidationError("focus_subjects must contain only strings.")
-        canonical = _SUBJECT_LOOKUP.get(item.strip().lower())
-        if canonical is None:
-            raise ValidationError(
-                f"Unknown subject '{item}'. Allowed: {', '.join(VALID_SUBJECTS)}."
-            )
-        if canonical not in seen:
-            seen.add(canonical)
+        normalized = _normalize_subject(item)
+        if not normalized:
+            raise ValidationError("focus_subjects must not contain blank entries.")
+        canonical = _SUBJECT_LOOKUP.get(normalized.lower(), normalized)
+        key = canonical.lower()
+        if key not in seen:
+            seen.add(key)
             cleaned.append(canonical)
+    if len(cleaned) > _MAX_SUBJECTS:
+        raise ValidationError(
+            f"focus_subjects can contain at most {_MAX_SUBJECTS} subjects."
+        )
     return cleaned
 
 
@@ -145,6 +180,54 @@ def validate_knowledge_import(body):
     if not isinstance(url, str) or not is_valid_http_url(url):
         raise ValidationError("url must be a valid http(s) URL.")
     return source_type, None, url
+
+
+# A filename is a display label (the material's title), not a path — keep it short and
+# strip anything that isn't part of a human-readable name.
+_MAX_FILENAME_LEN = 120
+
+
+def validate_file_import(body, *, allowed_media_types, max_bytes):
+    """Validate a POST /knowledge/import body with ``source_type='file'``.
+
+    Shape: ``{"source_type": "file", "data": "<base64>", "mime_type": "...",
+    "filename": "..."}``. The file is transcribed to text server-side
+    (app/ai/extractor.py) before storage, so this only checks that the payload is a
+    decodable file of an allowed type and a sane size. Returns
+    ``(data_b64, media_type, filename_or_none)``.
+    """
+    if not isinstance(body, dict):
+        raise ValidationError("Request body must be a JSON object.")
+
+    media_type = body.get("mime_type")
+    if not isinstance(media_type, str) or media_type not in allowed_media_types:
+        raise ValidationError(
+            "mime_type must be one of: " + ", ".join(allowed_media_types) + "."
+        )
+
+    data = body.get("data")
+    if not isinstance(data, str) or not data.strip():
+        raise ValidationError("data must be a base64-encoded file.")
+
+    # Validate that it decodes, and bound the *decoded* size — the wire cap
+    # (MAX_CONTENT_LENGTH) is the base64 envelope; this is the real file size.
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValidationError("data must be valid base64.") from exc
+    if not raw:
+        raise ValidationError("The uploaded file is empty.")
+    if len(raw) > max_bytes:
+        mb = max_bytes / 1_000_000
+        raise ValidationError(f"The file is too large (max {mb:.0f} MB).")
+
+    filename = body.get("filename")
+    if filename is not None:
+        if not isinstance(filename, str):
+            raise ValidationError("filename must be a string.")
+        filename = _WHITESPACE_RE.sub(" ", filename).strip()[:_MAX_FILENAME_LEN] or None
+
+    return data, media_type, filename
 
 
 def validate_profile_update(body):
