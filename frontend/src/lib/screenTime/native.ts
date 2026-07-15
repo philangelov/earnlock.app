@@ -67,8 +67,14 @@ function writeShieldConfig(): void {
         secondaryButtonLabelColor: rgb('#9c9ea6'),
       },
       {
-        // Primary opens EarnLock's lock screen; the shield closes as the app comes up.
-        primary: { type: 'openUrl', url, behavior: 'close' },
+        // Primary opens EarnLock's lock screen so the learner can earn time. Launching the
+        // containing app from a shield-action extension is the delicate part: a synchronous
+        // NSExtensionContext().open() runs before the extension is ready to hand off and
+        // silently no-ops, which is why "Start a quiz" did nothing. `openUrlWithDispatch`
+        // defers the open to the next main-run-loop tick, and `delay` holds the shield (and
+        // thus the extension process) alive ~0.6s so that dispatched open actually fires
+        // before the shield tears down. This is what makes the button reliably open the app.
+        primary: { type: 'openUrlWithDispatch', url, behavior: 'close', delay: 0.6 },
         // "Not now" just returns to the Home screen — the apps stay locked.
         secondary: { behavior: 'close' },
       },
